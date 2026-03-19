@@ -1,0 +1,7 @@
+((section . severity-stats) (severity . critical) (total . 15) (accepted . 14) (accept-rate . 0.93))
+((section . severity-stats) (severity . warning) (total . 40) (accepted . 32) (accept-rate . 0.80))
+((section . severity-stats) (severity . suggestion) (total . 25) (accepted . 15) (accept-rate . 0.60))
+((section . severity-stats) (severity . nitpick) (total . 30) (accepted . 8) (accept-rate . 0.27))
+((section . style-preference) (note . "User prefers security comments with remediation code examples"))
+((section . style-preference) (note . "User prefers concise comments, no more than 3 sentences per inline comment"))
+((section . repo-preference) (repo . "example/webapp") (focus-areas . (security performance)) (ignore-paths . ("vendor/" "generated/" "*.min.js")))
