@@ -438,15 +438,22 @@
       (define body (get 'body r))
       (define comment-type (get* 'comment-type r 'review-comment))
       ;; determine API path based on review-type and comment-type
+      ;; GitCode uses discussion_id for PR comment replies;
+      ;; GitHub uses in_reply_to on the PR comments endpoint
+      (define discussion-id (get* 'discussion-id r #f))
       (define api-path
         (case review-type
           [(pr)
-           (case comment-type
-             ;; reply to a PR review comment (inline) — uses in_reply_to field
-             [(review-comment)
+           (cond
+             ;; GitCode: reply via discussions endpoint
+             [(and (eq? platform 'gitcode) discussion-id)
+              (format "/repos/~a/~a/pulls/~a/discussions/~a/comments"
+                      owner repo pr-number discussion-id)]
+             ;; GitHub: reply to review comment via in_reply_to
+             [(eq? comment-type 'review-comment)
               (format "/repos/~a/~a/pulls/~a/comments" owner repo pr-number)]
-             ;; reply to a PR issue comment (conversation)
-             [(issue-comment)
+             ;; issue comment (conversation)
+             [(eq? comment-type 'issue-comment)
               (format "/repos/~a/~a/issues/~a/comments" owner repo pr-number)]
              [else
               (format "/repos/~a/~a/pulls/~a/comments" owner repo pr-number)])]
@@ -454,9 +461,12 @@
            (format "/repos/~a/~a/commits/~a/comments" owner repo commit-sha)]
           [else (error 'send-replies "Unknown review-type: ~a" review-type)]))
       (define payload
-        (case comment-type
-          [(review-comment)
-           ;; PR review comment reply: needs in_reply_to
+        (cond
+          ;; GitCode discussion reply: just body
+          [(and (eq? platform 'gitcode) discussion-id)
+           (hasheq 'body body)]
+          ;; GitHub PR review comment reply: needs in_reply_to
+          [(eq? comment-type 'review-comment)
            (hasheq 'body body 'in_reply_to comment-id)]
           [else
            ;; issue comment or commit comment: just body

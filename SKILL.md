@@ -220,9 +220,10 @@ fetch-diff 返回的 JSON 中包含已有评论数据：
 
 - `in-reply-to`：目标评论的 API comment ID（从获取的已有评论中提取）
 - `comment-type`：决定使用哪个 API 端点发送回复
-  - `review-comment`：PR inline 代码评论，使用 `in_reply_to` 字段回复
+  - `review-comment`：PR inline 代码评论。GitHub 使用 `in_reply_to` 字段回复；GitCode 使用 `discussion-id` 通过 discussions 端点回复
   - `issue-comment`：PR 会话级评论，直接发新 issue comment
   - `commit-comment`：Commit 评论，直接发新 commit comment
+- `discussion-id`：GitCode 专用字段，从 PR 评论的 `discussion_id` 获取。GitCode 回复必需，GitHub 可省略
 - `context`：引用原评论内容摘要，方便用户阅读时理解上下文，发送时忽略
 
 ### 格式规范

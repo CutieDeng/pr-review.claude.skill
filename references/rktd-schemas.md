@@ -69,6 +69,7 @@
 | `id` | integer | 从 1 开始的序号 |
 | `in-reply-to` | integer | 目标评论的 API comment ID |
 | `comment-type` | symbol | `review-comment`（PR inline）\| `issue-comment`（PR 会话）\| `commit-comment` |
+| `discussion-id` | string 或 `#f` | GitCode 专用：讨论 ID（从 PR 评论的 `discussion_id` 字段获取）。GitCode 回复必需，GitHub 忽略 |
 | `body` | string | 回复内容 |
 | `context` | string 或 `#f` | 引用的原评论摘要（仅供阅读，不发送） |
 

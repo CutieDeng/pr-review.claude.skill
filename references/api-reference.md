@@ -177,7 +177,14 @@ gh api repos/{owner}/{repo}/pulls/{n}/comments -X POST -f body="..." -F in_reply
 
 ## GitCode
 
-Base: `https://api.gitcode.com` (或自定义)
+Base: `https://gitcode.com/api/v5`
+
+认证：所有请求通过 `access_token` query param 传递 token。
+
+认证查找优先级：
+1. 环境变量 `GITCODE_TOKEN`
+2. 项目目录 `./.gitcode.token`
+3. 用户主目录 `~/.gitcode.token`
 
 ### PR 元数据
 ```
@@ -189,12 +196,63 @@ GET /repos/{owner}/{repo}/pulls/{pull_number}
 GET /repos/{owner}/{repo}/pulls/{pull_number}/files
 ```
 
+### 获取 PR 评论
+```
+GET /repos/{owner}/{repo}/pulls/{pull_number}/comments
+```
+返回字段包含 `comment_type`：
+- `"diff_comment"` — 代码行评论（inline）
+- `"pr_comment"` — 普通 PR 评论
+
+每条评论含 `discussion_id` 字段，用于回复。
+
+### 创建 PR 评论
+```
+POST /repos/{owner}/{repo}/pulls/{pull_number}/comments
+```
+Body:
+```json
+{
+  "body": "Comment text",
+  "path": "file.rs",
+  "position": 12
+}
+```
+`path` + `position` 用于代码行评论（`diff_comment`）。省略则为普通评论（`pr_comment`）。
+
+### 回复 PR 评论
+```
+POST /repos/{owner}/{repo}/pulls/{pull_number}/discussions/{discussion_id}/comments
+```
+Body:
+```json
+{
+  "body": "Reply text"
+}
+```
+`discussion_id` 从评论的 `discussion_id` 字段获取。**注意**：GitCode 不使用 GitHub 的 `in_reply_to` 机制。
+
+### 获取单条 PR 评论详情
+```
+GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
+```
+返回完整评论信息，包含 `discussion_id`。
+
 ### 提交 Review
 ```
 POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews
 ```
+格式与 GitHub 兼容。
 
-格式与 GitHub 兼容。认证查找优先级：
-1. 环境变量 `GITCODE_TOKEN`
-2. 项目目录 `./.gitcode.token`
-3. 用户主目录 `~/.gitcode.token`
+### Commit 评论
+```
+GET /repos/{owner}/{repo}/commits/{sha}/comments
+POST /repos/{owner}/{repo}/commits/{sha}/comments
+```
+Body:
+```json
+{
+  "body": "Comment text"
+}
+```
+**限制**：GitCode commit comment API **不支持** inline 定位（`path`/`position` 被忽略）。所有评论均为 commit 级别通用评论。需要 inline 效果时，在 body 中嵌入 `**\`path:line\`**` 前缀。
