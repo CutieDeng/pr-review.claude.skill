@@ -2,7 +2,7 @@
 name: pr-review
 description: "GitHub/GitCode PR/Commit 自动 review 技能。解析 PR 或 Commit URL，获取 diff，生成结构化 comment.rktd 和可执行 send-comment.rkt 脚本。支持交互式逐条确认后发送评论。"
 user-invocable: true
-argument: "<URL> [--interactive]"
+argument: "<URL> [--mode report|inline|reply] [--interactive]"
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch, Agent
 ---
 
@@ -12,23 +12,66 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch, Agent
 
 ## 触发条件
 
-用户执行 `/pr-review <URL>` 或 `/pr-review <URL> --interactive`。
+用户执行 `/pr-review <URL> [--mode <mode>] [--interactive]`。
 
 URL 可以是 PR 或 Commit 链接。
 
+## 执行模式
+
+通过 `--mode` 指定，默认 `inline`。
+
+### `--mode report`（报告模式）
+
+生成**一条**完整的 review report 作为 decision body。适合正式审查、需要结构化输出的场景。
+
+输出特征：
+- decision body 是完整报告，包含：总评、按类别分组的发现（安全/正确性/性能/风格）、具体规则引用、修复建议
+- 不生成或仅生成极少量 inline-comment（仅 critical 级别）
+- PR 模式：event 根据报告结论设置（`APPROVE` / `REQUEST_CHANGES` / `COMMENT`）
+- Commit 模式：decision body 作为单条总结评论发送
+
+### `--mode inline`（行评论模式，默认）
+
+生成**简短 decision** + **多条 inline-comment**。适合轻量代码审查、逐行讨论细节。
+
+输出特征：
+- decision body 简短（1-3 句总结）
+- 主要内容在 inline-comment 中，每条针对具体代码行
+- 覆盖多个文件、多个 severity 级别
+- 数量受 `max-inline-comments` 控制（默认 20）
+
+### `--mode reply`（回复模式）
+
+阅读已有评论，生成**回复**。适合回应他人 review 意见、质疑、或消极评价。
+
+输出特征：
+- 不生成 decision 和 inline-comment
+- 仅生成 reply 记录，针对已有评论逐条回复
+- 默认进入 `--interactive` 模式，与用户讨论每条回复的措辞和策略
+- 对消极/质疑性评论：先分析评论是否有道理，再建议回复策略（接受/反驳/澄清）
+- 用户可指定回复原则（如"礼貌但坚持"、"承认问题并说明计划"）
+
+交互流程：
+1. 列出所有已有评论，按时间或严重程度排序
+2. 对每条评论提示：`[r]eply [s]kip [d]iscuss > `
+3. `discuss`：与用户讨论该评论的上下文和最佳回复策略后再生成回复
+4. 所有评论处理完毕后生成 comment.rktd
+
 ## 输入解析
 
-从参数中提取 URL 和可选 flags：
+从参数中提取 URL、模式和可选 flags：
 
-1. 解析 URL hostname 识别平台：
+1. 提取 `--mode`：`report` | `inline`（默认）| `reply`
+2. 提取 `--interactive`：reply 模式默认开启，其他模式手动开启
+3. 解析 URL hostname 识别平台：
    - `github.com` → platform `github`
    - `gitcode.com` → platform `gitcode`
    - 其他 → 尝试作为 GitHub Enterprise 处理
-2. 从 URL path 识别类型并提取字段：
+4. 从 URL path 识别类型并提取字段：
    - **PR**：`/<owner>/<repo>/pull/<number>` → `review-type: pr`
    - **PR (GitCode)**：`/<owner>/<repo>/pull/<number>` → `review-type: pr`
    - **Commit**：`/<owner>/<repo>/commit/<sha>` → `review-type: commit`
-3. 若解析失败，报错并终止
+5. 若解析失败，报错并终止
 
 ## 数据获取
 
@@ -98,17 +141,40 @@ GET {api-base}/repos/{owner}/{repo}/commits/{sha}/comments
 
 ## 分析流程
 
-对每个 changed file 执行：
+### 通用步骤（所有模式）
 
 1. **跳过判断**：检查 `preferences.rktd` 中 `ignore-paths`，跳过 vendor/generated 等目录
-2. **阅读已有评论**：分析 fetch-diff 获取的已有评论（`review-comments`、`issue-comments`、`comments`），了解他人已指出的问题，避免重复评论
+2. **阅读已有评论**：分析 fetch-diff 获取的已有评论（`review-comments`、`issue-comments`、`comments`），了解他人已指出的问题
+
+### report 模式
+
+3. 对所有 changed file 进行全面分析，按类别归纳发现
+4. 撰写结构化报告作为 decision body，包含：
+   - 总体评价（1-2 句）
+   - 按类别分组的发现列表（引用文件和行号）
+   - 修复建议和优先级
+5. 仅为 critical 级别发现生成 inline-comment（可选，≤3 条）
+6. 设置 event（PR 模式）
+
+### inline 模式（默认）
+
 3. **规则匹配**：将 diff hunk 与 `config.rktd` 中 `(section . rule)` 记录匹配
 4. **严重级别调整**：参考 `preferences.rktd` 中 `severity-stats`：
    - 若某 severity 的 `accept-rate` < 0.2，减少该级别评论数量
    - 若 `accept-rate` > 0.8，可适当增加
 5. **评论生成**：为每个发现生成 inline-comment 记录
-6. **回复生成**：若用户要求回复他人评论，或已有评论需要回应（如用户通过 `--interactive` 指定），生成 reply 记录
-7. **数量控制**：总评论数不超过 `config.rktd` 中 `max-inline-comments`（默认 20）
+6. **数量控制**：总评论数不超过 `config.rktd` 中 `max-inline-comments`（默认 20）
+7. 生成简短 decision body（1-3 句总结）
+
+### reply 模式
+
+3. 列出所有已有评论，分析每条评论的意图（提问/建议/批评/赞同）
+4. 进入交互流程（默认 `--interactive`），逐条处理：
+   - 展示原评论内容、作者、位置
+   - 分析评论是否合理，建议回复策略
+   - 用户选择 `[r]eply [s]kip [d]iscuss`
+   - `discuss`：与用户深入讨论后再生成回复
+5. 仅生成 reply 记录，不生成 decision 和 inline-comment
 
 ### 已有评论处理
 
@@ -236,7 +302,7 @@ fetch-diff 返回的 JSON 中包含已有评论数据：
 
 ### 字段说明
 
-**meta 通用字段**：`review-type`（`pr` 或 `commit`）、`platform`、`owner`、`repo`、`reviewed-at`
+**meta 通用字段**：`review-type`（`pr` 或 `commit`）、`mode`（`report` | `inline` | `reply`）、`platform`、`owner`、`repo`、`reviewed-at`
 **meta PR 专有**：`pr-url`、`pr-number`、`pr-title`、`pr-author`
 **meta commit 专有**：`commit-url`、`commit-sha`、`commit-message`、`commit-author`
 
@@ -274,34 +340,75 @@ racket send-comment.rkt --skip-nitpicks    # 跳过 nitpick 级别
 
 ## 输出摘要
 
-完成后打印：
+完成后打印（按模式调整）：
 
+### report 模式
 ```
-## Review 完成
+## Review 完成（report 模式）
 
-**目标**: owner/repo#42 — "PR title"        (PR)
-         owner/repo@abc1234 — "Fix something" (Commit)
-**决策**: REQUEST_CHANGES                     (仅 PR)
+**目标**: owner/repo#42 — "PR title"
+**决策**: REQUEST_CHANGES
+**报告**: 包含 N 项发现（M critical, K warning, ...）
+
+### 文件
+- `comment.rktd` — 报告数据（可编辑后再发送）
+```
+
+### inline 模式（默认）
+```
+## Review 完成（inline 模式）
+
+**目标**: owner/repo#42 — "PR title"
+**决策**: COMMENT（简短总结）
 **评论统计**: 3 critical, 5 warning, 2 suggestion, 1 nitpick
 
 ### 文件
 - `comment.rktd` — 评论数据（可编辑后再发送）
-- `send-comment.rkt` — 发送脚本
+```
 
-### 使用方式
-1. 查看/编辑 `comment.rktd`
-2. 运行 `racket send-comment.rkt` 交互式发送
-3. 或 `racket send-comment.rkt --dry-run` 预览
+### reply 模式
+```
+## Reply 完成
+
+**目标**: owner/repo#42 — "PR title"
+**回复统计**: N 条回复（已跳过 M 条）
+
+### 文件
+- `comment.rktd` — 回复数据（可编辑后再发送）
+```
+
+通用使用方式：
+```bash
+racket send-comment.rkt                    # 交互式发送
+racket send-comment.rkt --dry-run          # 仅预览 API 调用
+racket send-comment.rkt --non-interactive  # 直接全部发送
 ```
 
 ## 交互模式（--interactive）
 
-当用户传入 `--interactive` 时，逐文件与用户讨论：
+`--interactive` 在 reply 模式下默认开启，其他模式手动开启。
+
+### report / inline 模式的交互
+
+逐文件与用户讨论：
 
 1. 显示文件 diff 摘要
 2. 列出该文件的待评论列表
 3. 用户可选择：保留 / 删除 / 修改每条评论
 4. 全部文件处理完毕后再生成最终 comment.rktd
+
+### reply 模式的交互
+
+逐条已有评论与用户讨论：
+
+1. 展示原评论（作者、内容、位置）
+2. 分析评论意图和合理性，建议回复策略
+3. 用户选择：
+   - `[r]eply`：采纳建议的回复（或用户提供自定义回复）
+   - `[s]kip`：跳过此评论
+   - `[d]iscuss`：深入讨论——用户可说明回复原则（如"承认问题但解释权衡"、"礼貌拒绝并给出理由"），agent 据此调整回复措辞
+4. 对消极/攻击性评论，agent 主动建议降温策略
+5. 全部处理完毕后生成 comment.rktd
 
 使用 AskUserQuestion 工具实现交互。
 
