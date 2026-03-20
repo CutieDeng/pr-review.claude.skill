@@ -1,2 +1,0 @@
-((section . meta) (review-type . commit) (commit-url . "https://gitcode.com/CutieDeng/pr-review/commit/7a38084a77e733dc069722982ff5e8e85cf83762") (platform . gitcode) (owner . "CutieDeng") (repo . "pr-review") (commit-sha . "7a38084a77e733dc069722982ff5e8e85cf83762") (commit-message . "FIX: Fix GitCode PR URL format from merge_requests to pull") (commit-author . "Cutie Deng") (reviewed-at . "2026-03-20T17:30:00+08:00"))
-((section . decision) (body . "文档修正，将 GitCode PR URL 格式从 merge_requests 改为 pull，与 GitCode 实际 URL 格式一致。变更正确，无问题。"))

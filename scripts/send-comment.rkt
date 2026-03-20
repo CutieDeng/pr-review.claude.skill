@@ -89,18 +89,38 @@
                "No auth found. Set ~a, create ~a, or configure fallback."
                (current-token-env) (current-token-file)))))
 
-;; ── GitHub API ───────────────────────────────────────────────────────
+;; ── API ──────────────────────────────────────────────────────────────
 
-(define (github-api-call method path body-jsexpr token
-                         #:api-base [api-base "https://api.github.com"])
+(define (api-base-for-platform plat)
+  (case plat
+    [(github) "https://api.github.com"]
+    [(gitcode) "https://gitcode.com/api/v5"]
+    [else (error 'api-base "Unknown platform: ~a" plat)]))
+
+(define (api-call method path body-jsexpr token plat)
+  (define api-base (api-base-for-platform plat))
   (define u (string->url (string-append api-base path)))
   (define host (url-host u))
-  (define request-path (url->string (struct-copy url u [scheme #f] [host #f] [port #f])))
+  (define raw-path (url->string (struct-copy url u [scheme #f] [host #f] [port #f])))
+  ;; GitCode v5: token via query param; GitHub: via Authorization header
+  (define request-path
+    (case plat
+      [(gitcode)
+       (if (string-contains? raw-path "?")
+           (string-append raw-path "&access_token=" token)
+           (string-append raw-path "?access_token=" token))]
+      [else raw-path]))
   (define headers
-    (list (format "Authorization: token ~a" token)
-          "Accept: application/vnd.github.v3+json"
-          "Content-Type: application/json"
-          "User-Agent: pr-review-rkt"))
+    (case plat
+      [(gitcode)
+       (list "Accept: application/json"
+             "Content-Type: application/json"
+             "User-Agent: pr-review-rkt")]
+      [else
+       (list (format "Authorization: token ~a" token)
+             "Accept: application/vnd.github.v3+json"
+             "Content-Type: application/json"
+             "User-Agent: pr-review-rkt")]))
   (define body-bytes
     (if body-jsexpr
         (jsexpr->string body-jsexpr)
@@ -291,7 +311,7 @@
      (define token (force current-token))
      (printf "Sending review to ~a ...\n" api-path)
      (define-values (status resp-body)
-       (github-api-call "POST" api-path payload token))
+       (api-call "POST" api-path payload token platform))
      (if (regexp-match? #rx"^HTTP/[0-9.]+ 200" status)
          (displayln (color 32 "Review submitted successfully!"))
          (begin (printf "~a: ~a\n" (color 31 "Error") status)
@@ -326,7 +346,7 @@
      (when decision
        (printf "Sending summary comment ...\n")
        (define-values (st rb)
-         (github-api-call "POST" api-path (hasheq 'body (get 'body decision)) token))
+         (api-call "POST" api-path (hasheq 'body (get 'body decision)) token platform))
        (unless (regexp-match? #rx"^HTTP/[0-9.]+ 201" st)
          (printf "~a: ~a\n~a\n" (color 31 "Error") st rb)))
      ;; inline comments one by one
@@ -335,7 +355,7 @@
        (printf "Sending [~a/~a] ~a:~a ...\n" i (length final-comments)
                (get* 'path c "—") (get* 'line c "—"))
        (define-values (st rb)
-         (github-api-call "POST" api-path (build-commit-comment-payload c) token))
+         (api-call "POST" api-path (build-commit-comment-payload c) token platform))
        (if (regexp-match? #rx"^HTTP/[0-9.]+ 201" st)
            (printf "  ~a\n" (color 32 "ok"))
            (printf "  ~a: ~a\n~a\n" (color 31 "Error") st rb)))
