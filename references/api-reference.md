@@ -210,15 +210,15 @@ GET /repos/{owner}/{repo}/pulls/{pull_number}/comments
 ```
 POST /repos/{owner}/{repo}/pulls/{pull_number}/comments
 ```
-Body:
-```json
-{
-  "body": "Comment text",
-  "path": "file.rs",
-  "position": 12
-}
-```
-`path` + `position` 用于代码行评论（`diff_comment`）。省略则为普通评论（`pr_comment`）。
+Parameters（formData）：
+- `body`*（string）— 必填，评论内容
+- `commit_id`（string）— 可选，PR 代码评论的 commit id
+- `path`（string）— 可选，PR 代码评论的文件名
+- `position`（integer）— 可选，PR 代码评论 diff 中的行数
+
+省略 `path`/`position` 则为普通 PR 评论，带上则为 inline 代码评论。
+
+参考：https://gitee.com/api/v5/swagger#/postV5ReposOwnerRepoPullsNumberComments
 
 ### 回复 PR 评论
 ```
@@ -242,7 +242,9 @@ GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
 ```
 POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews
 ```
-格式与 GitHub 兼容（需使用 `api.gitcode.com` base URL）。
+**不可用**——即使使用 `api.gitcode.com` 仍返回 404。
+
+**替代方案**：decision 作为普通评论（`POST .../comments`，不带 `path`/`position`），inline comments 逐条带 `path`+`position` 发送。
 
 ### Commit 评论
 ```

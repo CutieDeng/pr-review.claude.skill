@@ -345,9 +345,24 @@
 
 ;; ── send: PR review (batch) ──────────────────────────────────────────
 
+;; Build individual PR comment payload (for GitCode per-comment sending)
+;; 支持 inline：body*(必填), path(文件名), position(diff 行偏移)
+(define (build-pr-comment-payload c)
+  (define h (make-hasheq))
+  (hash-set! h 'body (get 'body c))
+  (when (get* 'path c) (hash-set! h 'path (get* 'path c)))
+  (when (get* 'position c) (hash-set! h 'position (get* 'position c)))
+  h)
+
 (define (send-pr-review! final-comments)
   (unless decision
     (error 'send-comment "PR review requires a (section . decision) record"))
+  (case platform
+    [(gitcode) (send-pr-review/individual! final-comments)]
+    [else      (send-pr-review/batch! final-comments)]))
+
+;; GitHub: batch via /reviews endpoint
+(define (send-pr-review/batch! final-comments)
   (define payload (build-review-payload decision final-comments))
   (define api-path (format "/repos/~a/~a/pulls/~a/reviews" owner repo pr-number))
   (cond
@@ -365,6 +380,38 @@
          (displayln (color 32 "Review submitted successfully!"))
          (begin (printf "~a: ~a\n" (color 31 "Error") status)
                 (displayln resp-body)))]))
+
+;; GitCode: /reviews 不可用，逐条通过 /comments 发送
+(define (send-pr-review/individual! final-comments)
+  (define comment-path (format "/repos/~a/~a/pulls/~a/comments" owner repo pr-number))
+  (cond
+    [(dry-run?)
+     (displayln "\n--- DRY RUN ---")
+     (when send-decision?
+       (printf "POST ~a  [decision]\n" comment-path)
+       (displayln (jsexpr->string (hasheq 'body (get 'body decision)))))
+     (for ([c (in-list final-comments)] [i (in-naturals 1)])
+       (printf "POST ~a  [inline ~a/~a]\n" comment-path i (length final-comments))
+       (displayln (jsexpr->string (build-pr-comment-payload c))))
+     (displayln "--- END DRY RUN ---")]
+    [else
+     (define token (force current-token))
+     (when send-decision?
+       (printf "Sending decision to ~a ...\n" comment-path)
+       (define-values (status resp-body)
+         (api-call "POST" comment-path (hasheq 'body (get 'body decision)) token platform))
+       (if (regexp-match? #rx"^HTTP/[0-9.]+ 20[01]" status)
+           (displayln (color 32 "Decision sent."))
+           (begin (printf "~a: ~a\n" (color 31 "Error") status)
+                  (displayln resp-body))))
+     (for ([c (in-list final-comments)] [i (in-naturals 1)])
+       (printf "Sending comment ~a/~a ...\n" i (length final-comments))
+       (define-values (status resp-body)
+         (api-call "POST" comment-path (build-pr-comment-payload c) token platform))
+       (if (regexp-match? #rx"^HTTP/[0-9.]+ 20[01]" status)
+           (printf "  ~a\n" (color 32 "OK"))
+           (begin (printf "  ~a: ~a\n" (color 31 "Error") status)
+                  (displayln resp-body))))]))
 
 ;; ── send: commit comments (individual) ──────────────────────────────
 

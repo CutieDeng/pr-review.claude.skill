@@ -205,6 +205,7 @@ fetch-diff 返回的 JSON 中包含已有评论数据：
  (id . 1)
  (path . "src/foo.rs")
  (line . 45)
+ (position . 12)
  (side . "RIGHT")
  (body . "具体评论内容...")
  (severity . critical)
@@ -239,6 +240,7 @@ fetch-diff 返回的 JSON 中包含已有评论数据：
  (id . 1)
  (path . "src/foo.rs")
  (line . 12)
+ (position . 5)
  (side . "RIGHT")
  (body . "具体评论内容...")
  (severity . warning)
@@ -287,10 +289,13 @@ fetch-diff 返回的 JSON 中包含已有评论数据：
 - Commit：可选，仅含 `body`（无 `event`），作为总结评论发送
 
 **inline-comment**：
-- `line`：PR 模式为文件行号 + `side`（`"RIGHT"` / `"LEFT"`）；commit 模式为 diff 中的 position
+- `line`：文件行号（新文件中的行号）+ `side`（`"RIGHT"` / `"LEFT"`）。GitHub `/reviews` API 使用此字段
+- `position`：diff 中从 `@@` hunk header 之后第 1 行开始计数的行偏移。GitCode `/comments` API 使用此字段。agent 生成评论时必须根据 diff 数据计算此值
 - `severity`：`critical` | `warning` | `suggestion` | `nitpick`
 - `category`：`security` | `correctness` | `performance` | `style` | `docs`
 - `rule-ref`：关联 config.rktd 规则 id，或 `#f`
+
+**position 计算方法**：从 `fetch-diff.rkt --output json` 返回的 files 数组中取每个文件的 diff 字段，`@@` 行之后的每一行（包括 context、`+`、`-` 行）从 1 开始计数。多个 hunk 时 position 在各 hunk 间连续累加。
 
 ## 生成 send-comment.rkt
 
