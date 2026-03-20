@@ -82,19 +82,12 @@
 ;; Current platform — set before API calls
 (define current-platform (make-parameter 'github))
 
-;; Append token as query param for gitcode, or use Authorization header for github
-(define (add-auth-to-path request-path token platform)
-  (case platform
-    [(gitcode)
-     (if (string-contains? request-path "?")
-         (string-append request-path "&access_token=" token)
-         (string-append request-path "?access_token=" token))]
-    [else request-path]))
-
+;; Auth via Authorization header for both platforms (aligned with gitcode_mcp_server)
 (define (auth-headers token platform)
   (case platform
     [(gitcode)
-     (list "Accept: application/json"
+     (list (format "Authorization: Bearer ~a" token)
+           "Accept: application/json"
            "User-Agent: pr-review-rkt")]
     [else
      (list (format "Authorization: token ~a" token)
@@ -105,8 +98,7 @@
   (define platform (current-platform))
   (define u (string->url (string-append api-base path)))
   (define host (url-host u))
-  (define raw-path (url->string (struct-copy url u [scheme #f] [host #f] [port #f])))
-  (define request-path (add-auth-to-path raw-path token platform))
+  (define request-path (url->string (struct-copy url u [scheme #f] [host #f] [port #f])))
   (define-values (status _headers resp-port)
     (http-sendrecv host request-path
                    #:ssl? #t
@@ -120,12 +112,12 @@
   (define platform (current-platform))
   (define u (string->url (string-append api-base path)))
   (define host (url-host u))
-  (define raw-path (url->string (struct-copy url u [scheme #f] [host #f] [port #f])))
-  (define request-path (add-auth-to-path raw-path token platform))
+  (define request-path (url->string (struct-copy url u [scheme #f] [host #f] [port #f])))
   (define headers
     (case platform
       [(gitcode)
-       (list (format "Accept: ~a" accept)
+       (list (format "Authorization: Bearer ~a" token)
+             (format "Accept: ~a" accept)
              "User-Agent: pr-review-rkt")]
       [else
        (list (format "Authorization: token ~a" token)
@@ -167,7 +159,7 @@
 (define (api-base-for platform)
   (case platform
     [(github) "https://api.github.com"]
-    [(gitcode) "https://gitcode.com/api/v5"]
+    [(gitcode) "https://api.gitcode.com/api/v5"]
     [else (error 'api-base "Unknown platform: ~a" platform)]))
 
 ;; ── fetch logic ──────────────────────────────────────────────────────

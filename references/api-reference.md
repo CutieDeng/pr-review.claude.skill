@@ -177,9 +177,9 @@ gh api repos/{owner}/{repo}/pulls/{n}/comments -X POST -f body="..." -F in_reply
 
 ## GitCode
 
-Base: `https://gitcode.com/api/v5`
+Base: `https://api.gitcode.com/api/v5`
 
-认证：所有请求通过 `access_token` query param 传递 token。
+认证：`Authorization: Bearer {token}` header（与 gitcode_mcp_server 对齐）。
 
 认证查找优先级：
 1. 环境变量 `GITCODE_TOKEN`
@@ -242,7 +242,7 @@ GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
 ```
 POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews
 ```
-格式与 GitHub 兼容。
+格式与 GitHub 兼容（需使用 `api.gitcode.com` base URL）。
 
 ### Commit 评论
 ```

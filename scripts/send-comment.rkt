@@ -94,7 +94,7 @@
 (define (api-base-for-platform plat)
   (case plat
     [(github) "https://api.github.com"]
-    [(gitcode) "https://gitcode.com/api/v5"]
+    [(gitcode) "https://api.gitcode.com/api/v5"]
     [else (error 'api-base "Unknown platform: ~a" plat)]))
 
 (define (api-call method path body-jsexpr token plat)
@@ -102,18 +102,13 @@
   (define u (string->url (string-append api-base path)))
   (define host (url-host u))
   (define raw-path (url->string (struct-copy url u [scheme #f] [host #f] [port #f])))
-  ;; GitCode v5: token via query param; GitHub: via Authorization header
-  (define request-path
-    (case plat
-      [(gitcode)
-       (if (string-contains? raw-path "?")
-           (string-append raw-path "&access_token=" token)
-           (string-append raw-path "?access_token=" token))]
-      [else raw-path]))
+  ;; Both platforms: token via Authorization header
+  (define request-path raw-path)
   (define headers
     (case plat
       [(gitcode)
-       (list "Accept: application/json"
+       (list (format "Authorization: Bearer ~a" token)
+             "Accept: application/json"
              "Content-Type: application/json"
              "User-Agent: pr-review-rkt")]
       [else
