@@ -1,35 +1,38 @@
 ---
 name: pr-review
-description: "GitHub/GitCode PR 自动 review 技能。解析 PR URL，获取 diff，生成结构化 comment.rktd 和可执行 send-comment.rkt 脚本。支持交互式逐条确认后发送评论。"
+description: "GitHub/GitCode PR/Commit 自动 review 技能。解析 PR 或 Commit URL，获取 diff，生成结构化 comment.rktd 和可执行 send-comment.rkt 脚本。支持交互式逐条确认后发送评论。"
 user-invocable: true
-argument: "<PR-URL> [--interactive]"
+argument: "<URL> [--interactive]"
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch, Agent
 ---
 
-# PR Review
+# PR / Commit Review
 
-对 GitHub/GitCode Pull Request 执行自动化代码审查，生成结构化评论文件和发送脚本。
+对 GitHub/GitCode Pull Request 或 Commit 执行自动化代码审查，生成结构化评论文件和发送脚本。
 
 ## 触发条件
 
 用户执行 `/pr-review <URL>` 或 `/pr-review <URL> --interactive`。
 
+URL 可以是 PR 或 Commit 链接。
+
 ## 输入解析
 
-从参数中提取 PR URL 和可选 flags：
+从参数中提取 URL 和可选 flags：
 
 1. 解析 URL hostname 识别平台：
    - `github.com` → platform `github`
    - `gitcode.com` → platform `gitcode`
    - 其他 → 尝试作为 GitHub Enterprise 处理
-2. 从 URL path 提取 `owner`、`repo`、`pr-number`
-   - GitHub 格式：`/<owner>/<repo>/pull/<number>`
-   - GitCode 格式：`/<owner>/<repo>/merge_requests/<number>`
+2. 从 URL path 识别类型并提取字段：
+   - **PR**：`/<owner>/<repo>/pull/<number>` → `review-type: pr`
+   - **PR (GitCode)**：`/<owner>/<repo>/merge_requests/<number>` → `review-type: pr`
+   - **Commit**：`/<owner>/<repo>/commit/<sha>` → `review-type: commit`
 3. 若解析失败，报错并终止
 
 ## 数据获取
 
-### GitHub
+### GitHub — PR
 
 优先使用 `gh` CLI（已认证，无需额外 token）：
 
@@ -46,12 +49,25 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/files --paginate
 
 若 `gh` 不可用，fallback 到 WebFetch + `GITHUB_TOKEN`。
 
+### GitHub — Commit
+
+```bash
+# Commit 元数据 + diff
+gh api repos/{owner}/{repo}/commits/{sha}
+
+# Commit diff（raw 格式）
+gh api repos/{owner}/{repo}/commits/{sha} -H "Accept: application/vnd.github.v3.diff"
+```
+
+返回的 JSON 中 `files[]` 包含每个文件的 `filename`、`status`、`patch` 等信息，与 PR files 格式一致。
+
 ### GitCode
 
 使用 WebFetch 调用 REST API：
 ```
 GET {api-base}/repos/{owner}/{repo}/pulls/{pr-number}
 GET {api-base}/repos/{owner}/{repo}/pulls/{pr-number}/files
+GET {api-base}/repos/{owner}/{repo}/commits/{sha}
 ```
 
 ## 加载配置
@@ -91,18 +107,21 @@ GET {api-base}/repos/{owner}/{repo}/pulls/{pr-number}/files
 
 ## 生成 comment.rktd
 
-在项目根目录生成 `comment.rktd`，格式为 flat alist 多记录：
+在项目根目录生成 `comment.rktd`，格式为 flat alist 多记录。
+
+### PR review 格式
 
 ```racket
 ;; meta 记录
 ((section . meta)
+ (review-type . pr)
  (pr-url . "https://github.com/owner/repo/pull/42")
  (platform . github)
  (owner . "owner") (repo . "repo") (pr-number . 42)
  (pr-title . "PR title here") (pr-author . "alice")
  (reviewed-at . "2026-03-19T10:30:00Z"))
 
-;; 决策记录
+;; 决策记录（仅 PR）
 ((section . decision)
  (event . "REQUEST_CHANGES")   ; "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
  (body . "Overall summary of the review..."))
@@ -116,15 +135,46 @@ GET {api-base}/repos/{owner}/{repo}/pulls/{pr-number}/files
  (rule-ref . "no-sql-injection"))
 ```
 
-字段说明：
-- `event`：根据发现的问题严重程度自动决定
-  - 有 critical → `"REQUEST_CHANGES"`
-  - 仅 warning/suggestion → `"COMMENT"`
-  - 无问题 → `"APPROVE"`
-- `line` + `side`：使用 diff 中的行号，`side` 为 `"RIGHT"`（新代码）或 `"LEFT"`（旧代码）
+### Commit review 格式
+
+```racket
+;; meta 记录
+((section . meta)
+ (review-type . commit)
+ (commit-url . "https://github.com/owner/repo/commit/abc1234")
+ (platform . github)
+ (owner . "owner") (repo . "repo") (commit-sha . "abc1234def5678...")
+ (commit-message . "Fix something") (commit-author . "bob")
+ (reviewed-at . "2026-03-19T10:30:00Z"))
+
+;; 决策记录（commit 可选；若提供，body 作为总结评论单独发送）
+((section . decision)
+ (body . "Overall summary of the commit review..."))
+
+;; inline 评论（与 PR 格式一致）
+((section . inline-comment)
+ (id . 1) (path . "src/foo.rs") (line . 12) (side . "RIGHT")
+ (body . "具体评论内容...")
+ (severity . warning)
+ (category . correctness)
+ (rule-ref . #f))
+```
+
+### 字段说明
+
+**meta 通用字段**：`review-type`（`pr` 或 `commit`）、`platform`、`owner`、`repo`、`reviewed-at`
+**meta PR 专有**：`pr-url`、`pr-number`、`pr-title`、`pr-author`
+**meta commit 专有**：`commit-url`、`commit-sha`、`commit-message`、`commit-author`
+
+**decision**：
+- PR：必须提供，`event` 为 `"APPROVE"` | `"REQUEST_CHANGES"` | `"COMMENT"`
+- Commit：可选，仅含 `body`（无 `event`），作为总结评论发送
+
+**inline-comment**：
+- `line`：PR 模式为文件行号 + `side`（`"RIGHT"` / `"LEFT"`）；commit 模式为 diff 中的 position
 - `severity`：`critical` | `warning` | `suggestion` | `nitpick`
 - `category`：`security` | `correctness` | `performance` | `style` | `docs`
-- `rule-ref`：关联 config.rktd 中的规则 id，无关联则为 `#f`
+- `rule-ref`：关联 config.rktd 规则 id，或 `#f`
 
 使用 `writeln` 写入每条记录，确保每行一条。
 
@@ -146,17 +196,20 @@ racket send-comment.rkt --skip-nitpicks    # 跳过 nitpick 级别
 
 ## 存档
 
-将 `comment.rktd` 复制到 `reviews/history/<pr-number>-<timestamp>.rktd`。
+将 `comment.rktd` 复制到 `reviews/history/` 下：
+- PR：`<pr-number>-<timestamp>.rktd`
+- Commit：`<sha-prefix-7>-<timestamp>.rktd`
 
 ## 输出摘要
 
 完成后打印：
 
 ```
-## PR Review 完成
+## Review 完成
 
-**PR**: owner/repo#42 — "PR title"
-**决策**: REQUEST_CHANGES
+**目标**: owner/repo#42 — "PR title"        (PR)
+         owner/repo@abc1234 — "Fix something" (Commit)
+**决策**: REQUEST_CHANGES                     (仅 PR)
 **评论统计**: 3 critical, 5 warning, 2 suggestion, 1 nitpick
 
 ### 文件
@@ -215,7 +268,8 @@ Token 文件应为纯文本，内容仅含 token 字符串。建议加入 `.giti
 
 - `references/rktd-schemas.md` — comment/config/preferences 完整 schema
 - `references/api-reference.md` — GitHub/GitCode API 端点
-- `examples/comment-example.rktd` — 输出示例
+- `examples/comment-example.rktd` — PR review 输出示例
+- `examples/commit-comment-example.rktd` — Commit review 输出示例
 - `examples/config-example.rktd` — 配置示例
 - `examples/preferences-example.rktd` — 偏好示例
 - `scripts/send-comment.rkt` — 发送脚本模板

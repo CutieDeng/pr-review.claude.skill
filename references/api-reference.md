@@ -55,6 +55,38 @@ Body:
 - 若使用 `line`，需同时提供 `side`
 - `event` 为 `APPROVE` 或 `REQUEST_CHANGES` 时必须有 PR 的 review 权限
 
+### Commit 元数据
+```
+GET /repos/{owner}/{repo}/commits/{sha}
+```
+返回 JSON 含 `sha`, `commit.message`, `commit.author`, `files[]` 等。
+
+### Commit Diff
+```
+GET /repos/{owner}/{repo}/commits/{sha}
+Accept: application/vnd.github.v3.diff
+```
+返回原始 unified diff 文本。
+
+### 提交 Commit Comment（逐条）
+```
+POST /repos/{owner}/{repo}/commits/{sha}/comments
+```
+Body:
+```json
+{
+  "body": "Comment text",
+  "path": "file.rs",
+  "position": 12
+}
+```
+
+**注意**：
+- `position` 是 diff 中的行位置（从 1 开始），不是文件行号
+- `path` 和 `position` 可选；省略则为 commit 级别的通用评论
+- 每条评论单独发送，无批量 API
+- 返回 201 Created
+
 ### 认证（send-comment.rkt 查找优先级）
 1. 环境变量 `GITHUB_TOKEN`
 2. 项目目录 `./.github.token`
@@ -65,17 +97,26 @@ Body:
 
 ### gh CLI 快捷方式
 ```bash
-# 等价于 GET /repos/{owner}/{repo}/pulls/{n}
+# PR 元数据
 gh api repos/{owner}/{repo}/pulls/{n}
 
-# 获取 diff
+# PR diff
 gh api repos/{owner}/{repo}/pulls/{n} -H "Accept: application/vnd.github.v3.diff"
 
-# 分页获取文件
+# PR 文件列表（分页）
 gh api repos/{owner}/{repo}/pulls/{n}/files --paginate
 
-# 提交 review
+# 提交 PR review
 gh api repos/{owner}/{repo}/pulls/{n}/reviews -X POST -f body="..." -f event="COMMENT"
+
+# Commit 元数据 + files
+gh api repos/{owner}/{repo}/commits/{sha}
+
+# Commit diff
+gh api repos/{owner}/{repo}/commits/{sha} -H "Accept: application/vnd.github.v3.diff"
+
+# 提交 commit comment
+gh api repos/{owner}/{repo}/commits/{sha}/comments -X POST -f body="..." -f path="file.rs" -F position=12
 ```
 
 ## GitCode

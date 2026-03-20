@@ -222,13 +222,13 @@
 
 (unless meta
   (error 'send-comment "No (section . meta) record found in ~a" (comment-file)))
-(unless decision
-  (error 'send-comment "No (section . decision) record found in ~a" (comment-file)))
 
 (define platform (get 'platform meta))
+(define review-type (get* 'review-type meta 'pr))  ; 'pr or 'commit
 (define owner (get 'owner meta))
 (define repo (get 'repo meta))
-(define pr-number (get 'pr-number meta))
+(define pr-number (get* 'pr-number meta #f))
+(define commit-sha (get* 'commit-sha meta #f))
 
 ;; configure auth parameters for this platform; token resolved lazily
 (configure-auth-for-platform! platform)
@@ -239,8 +239,16 @@
       (filter (lambda (c) (not (eq? (get* 'severity c) 'nitpick))) all-comments)
       all-comments))
 
-(printf "\n~a Review: ~a/~a#~a\n" (color 1 "PR") owner repo pr-number)
-(printf "Decision: ~a\n" (get 'event decision))
+(define target-label
+  (case review-type
+    [(pr)     (format "~a/~a#~a" owner repo pr-number)]
+    [(commit) (format "~a/~a@~a" owner repo (substring (~a commit-sha) 0 (min 7 (string-length (~a commit-sha)))))]
+    [else     (format "~a/~a" owner repo)]))
+
+(printf "\n~a Review: ~a\n" (color 1 (string-upcase (~a review-type))) target-label)
+(when decision
+  (define evt (get* 'event decision #f))
+  (when evt (printf "Decision: ~a\n" evt)))
 (printf "Comments: ~a total (~a after filter)\n\n"
         (length all-comments) (length comments))
 
@@ -266,24 +274,76 @@
 
 (printf "\n~a: ~a comments to send\n" (color 1 "Final") (length final-comments))
 
-;; build payload
-(define payload (build-review-payload decision final-comments))
+;; ── send: PR review (batch) ──────────────────────────────────────────
 
-(cond
-  [(dry-run?)
-   (displayln "\n--- DRY RUN ---")
-   (printf "POST /repos/~a/~a/pulls/~a/reviews\n" owner repo pr-number)
-   (displayln (jsexpr->string payload))
-   (displayln "--- END DRY RUN ---")]
-  [else
-   (define token (force current-token))
-   (define api-path (format "/repos/~a/~a/pulls/~a/reviews" owner repo pr-number))
-   (printf "Sending review to ~a ...\n" api-path)
-   (define-values (status resp-body)
-     (github-api-call "POST" api-path payload token))
-   (cond
-     [(regexp-match? #rx"^HTTP/[0-9.]+ 200" status)
-      (displayln (color 32 "Review submitted successfully!"))]
-     [else
-      (printf "~a: ~a\n" (color 31 "Error") status)
-      (displayln resp-body)])])
+(define (send-pr-review! final-comments)
+  (unless decision
+    (error 'send-comment "PR review requires a (section . decision) record"))
+  (define payload (build-review-payload decision final-comments))
+  (define api-path (format "/repos/~a/~a/pulls/~a/reviews" owner repo pr-number))
+  (cond
+    [(dry-run?)
+     (displayln "\n--- DRY RUN ---")
+     (printf "POST ~a\n" api-path)
+     (displayln (jsexpr->string payload))
+     (displayln "--- END DRY RUN ---")]
+    [else
+     (define token (force current-token))
+     (printf "Sending review to ~a ...\n" api-path)
+     (define-values (status resp-body)
+       (github-api-call "POST" api-path payload token))
+     (if (regexp-match? #rx"^HTTP/[0-9.]+ 200" status)
+         (displayln (color 32 "Review submitted successfully!"))
+         (begin (printf "~a: ~a\n" (color 31 "Error") status)
+                (displayln resp-body)))]))
+
+;; ── send: commit comments (individual) ──────────────────────────────
+
+(define (build-commit-comment-payload c)
+  (define h (make-hasheq))
+  (hash-set! h 'body (get 'body c))
+  (when (get* 'path c)
+    (hash-set! h 'path (get 'path c))
+    (hash-set! h 'position (get 'line c)))
+  h)
+
+(define (send-commit-comments! final-comments)
+  (define api-path (format "/repos/~a/~a/commits/~a/comments" owner repo commit-sha))
+  (cond
+    [(dry-run?)
+     (displayln "\n--- DRY RUN ---")
+     ;; general comment from decision body if present
+     (when decision
+       (printf "POST ~a\n" api-path)
+       (displayln (jsexpr->string (hasheq 'body (get 'body decision)))))
+     (for ([c (in-list final-comments)])
+       (printf "POST ~a\n" api-path)
+       (displayln (jsexpr->string (build-commit-comment-payload c))))
+     (displayln "--- END DRY RUN ---")]
+    [else
+     (define token (force current-token))
+     ;; general comment from decision body if present
+     (when decision
+       (printf "Sending summary comment ...\n")
+       (define-values (st rb)
+         (github-api-call "POST" api-path (hasheq 'body (get 'body decision)) token))
+       (unless (regexp-match? #rx"^HTTP/[0-9.]+ 201" st)
+         (printf "~a: ~a\n~a\n" (color 31 "Error") st rb)))
+     ;; inline comments one by one
+     (for ([c (in-list final-comments)]
+           [i (in-naturals 1)])
+       (printf "Sending [~a/~a] ~a:~a ...\n" i (length final-comments)
+               (get* 'path c "—") (get* 'line c "—"))
+       (define-values (st rb)
+         (github-api-call "POST" api-path (build-commit-comment-payload c) token))
+       (if (regexp-match? #rx"^HTTP/[0-9.]+ 201" st)
+           (printf "  ~a\n" (color 32 "ok"))
+           (printf "  ~a: ~a\n~a\n" (color 31 "Error") st rb)))
+     (displayln (color 32 "Done."))]))
+
+;; ── dispatch ────────────────────────────────────────────────────────
+
+(case review-type
+  [(pr)     (send-pr-review! final-comments)]
+  [(commit) (send-commit-comments! final-comments)]
+  [else     (error 'send-comment "Unknown review-type: ~a" review-type)])

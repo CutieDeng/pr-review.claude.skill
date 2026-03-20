@@ -7,24 +7,44 @@
 
 ### meta 记录（恰好 1 条）
 
+**通用字段**：
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `section` | symbol `meta` | 记录类型标识 |
-| `pr-url` | string | PR 完整 URL |
+| `review-type` | symbol | `pr` \| `commit` |
 | `platform` | symbol | `github` \| `gitcode` |
 | `owner` | string | 仓库所有者 |
 | `repo` | string | 仓库名 |
+| `reviewed-at` | string | ISO 8601 时间戳 |
+
+**PR 专有字段**（`review-type` = `pr`）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `pr-url` | string | PR 完整 URL |
 | `pr-number` | integer | PR 编号 |
 | `pr-title` | string | PR 标题 |
 | `pr-author` | string | PR 作者 |
-| `reviewed-at` | string | ISO 8601 时间戳 |
 
-### decision 记录（恰好 1 条）
+**Commit 专有字段**（`review-type` = `commit`）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `commit-url` | string | Commit 完整 URL |
+| `commit-sha` | string | 完整 commit SHA |
+| `commit-message` | string | commit 消息（首行） |
+| `commit-author` | string | commit 作者 |
+
+### decision 记录
+
+- **PR**：恰好 1 条，必须包含 `event`
+- **Commit**：可选（0 或 1 条），仅含 `body`，作为总结评论发送
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `section` | symbol `decision` | 记录类型标识 |
-| `event` | string | `"APPROVE"` \| `"REQUEST_CHANGES"` \| `"COMMENT"` |
+| `event` | string（仅 PR） | `"APPROVE"` \| `"REQUEST_CHANGES"` \| `"COMMENT"` |
 | `body` | string | 总体评审摘要 |
 
 ### inline-comment 记录（0 到 N 条）
@@ -34,8 +54,8 @@
 | `section` | symbol `inline-comment` | 记录类型标识 |
 | `id` | integer | 从 1 开始的序号 |
 | `path` | string | 文件相对路径 |
-| `line` | integer | 行号（diff 中的行号） |
-| `side` | string | `"RIGHT"`（新代码）\| `"LEFT"`（旧代码） |
+| `line` | integer | PR：文件行号；Commit：diff 中的 position |
+| `side` | string | `"RIGHT"`（新代码）\| `"LEFT"`（旧代码）。Commit 模式可省略 |
 | `body` | string | 评论内容 |
 | `severity` | symbol | `critical` \| `warning` \| `suggestion` \| `nitpick` |
 | `category` | symbol | `security` \| `correctness` \| `performance` \| `style` \| `docs` |
