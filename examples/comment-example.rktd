@@ -76,3 +76,12 @@
  (category . style)
  (rule-ref . #f)
 ) ;; end inline #5
+
+;; ── reply #1 ──
+((section . reply)
+ (id . 1)
+ (in-reply-to . 987654321)
+ (comment-type . review-comment)
+ (body . "Good point — I'd also recommend using `argon2id` variant specifically, as it provides better resistance against both GPU and side-channel attacks than plain argon2.")
+ (context . "@bob suggested using bcrypt for password hashing")
+) ;; end reply #1

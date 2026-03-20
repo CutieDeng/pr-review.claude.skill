@@ -45,6 +45,12 @@ gh api repos/{owner}/{repo}/pulls/{pr-number} -H "Accept: application/vnd.github
 
 # PR 文件列表
 gh api repos/{owner}/{repo}/pulls/{pr-number}/files --paginate
+
+# 已有 review comments（inline 代码评论）
+gh api repos/{owner}/{repo}/pulls/{pr-number}/comments --paginate
+
+# 已有 issue comments（会话级评论）
+gh api repos/{owner}/{repo}/issues/{pr-number}/comments --paginate
 ```
 
 若 `gh` 不可用，fallback 到 WebFetch + `GITHUB_TOKEN`。
@@ -57,6 +63,9 @@ gh api repos/{owner}/{repo}/commits/{sha}
 
 # Commit diff（raw 格式）
 gh api repos/{owner}/{repo}/commits/{sha} -H "Accept: application/vnd.github.v3.diff"
+
+# 已有 commit comments
+gh api repos/{owner}/{repo}/commits/{sha}/comments
 ```
 
 返回的 JSON 中 `files[]` 包含每个文件的 `filename`、`status`、`patch` 等信息，与 PR files 格式一致。
@@ -67,7 +76,9 @@ gh api repos/{owner}/{repo}/commits/{sha} -H "Accept: application/vnd.github.v3.
 ```
 GET {api-base}/repos/{owner}/{repo}/pulls/{pr-number}
 GET {api-base}/repos/{owner}/{repo}/pulls/{pr-number}/files
+GET {api-base}/repos/{owner}/{repo}/pulls/{pr-number}/comments
 GET {api-base}/repos/{owner}/{repo}/commits/{sha}
+GET {api-base}/repos/{owner}/{repo}/commits/{sha}/comments
 ```
 
 ## 加载配置
@@ -90,12 +101,26 @@ GET {api-base}/repos/{owner}/{repo}/commits/{sha}
 对每个 changed file 执行：
 
 1. **跳过判断**：检查 `preferences.rktd` 中 `ignore-paths`，跳过 vendor/generated 等目录
-2. **规则匹配**：将 diff hunk 与 `config.rktd` 中 `(section . rule)` 记录匹配
-3. **严重级别调整**：参考 `preferences.rktd` 中 `severity-stats`：
+2. **阅读已有评论**：分析 fetch-diff 获取的已有评论（`review-comments`、`issue-comments`、`comments`），了解他人已指出的问题，避免重复评论
+3. **规则匹配**：将 diff hunk 与 `config.rktd` 中 `(section . rule)` 记录匹配
+4. **严重级别调整**：参考 `preferences.rktd` 中 `severity-stats`：
    - 若某 severity 的 `accept-rate` < 0.2，减少该级别评论数量
    - 若 `accept-rate` > 0.8，可适当增加
-4. **评论生成**：为每个发现生成 inline-comment 记录
-5. **数量控制**：总评论数不超过 `config.rktd` 中 `max-inline-comments`（默认 20）
+5. **评论生成**：为每个发现生成 inline-comment 记录
+6. **回复生成**：若用户要求回复他人评论，或已有评论需要回应（如用户通过 `--interactive` 指定），生成 reply 记录
+7. **数量控制**：总评论数不超过 `config.rktd` 中 `max-inline-comments`（默认 20）
+
+### 已有评论处理
+
+fetch-diff 返回的 JSON 中包含已有评论数据：
+- PR：`review-comments`（inline）+ `issue-comments`（会话级）
+- Commit：`comments`
+
+分析时：
+1. **展示给用户**：在输出摘要中列出已有评论的数量和关键内容
+2. **避免重复**：若已有评论指出的问题与 agent 发现相同，不重复生成
+3. **生成回复**：当用户明确要求回复某条评论（通过 `--interactive` 或自然语言指令）时，生成 `(section . reply)` 记录。Agent 也可主动建议回复——如纠正他人错误评论、补充信息等——但默认不自动生成回复，需用户确认
+4. **comment ID**：每条已有评论都有 `id` 字段，作为 reply 记录的 `in-reply-to` 值
 
 ### 评论质量要求
 
@@ -179,6 +204,26 @@ GET {api-base}/repos/{owner}/{repo}/commits/{sha}
  (rule-ref . #f)
 ) ;; end inline #1
 ```
+
+### reply 记录（回复已有评论）
+
+```racket
+;; ── reply #1 ──
+((section . reply)
+ (id . 1)
+ (in-reply-to . 123456789)
+ (comment-type . review-comment)  ; review-comment | issue-comment | commit-comment
+ (body . "回复内容...")
+ (context . "原评论摘要（仅供阅读，不发送）")
+) ;; end reply #1
+```
+
+- `in-reply-to`：目标评论的 API comment ID（从获取的已有评论中提取）
+- `comment-type`：决定使用哪个 API 端点发送回复
+  - `review-comment`：PR inline 代码评论，使用 `in_reply_to` 字段回复
+  - `issue-comment`：PR 会话级评论，直接发新 issue comment
+  - `commit-comment`：Commit 评论，直接发新 commit comment
+- `context`：引用原评论内容摘要，方便用户阅读时理解上下文，发送时忽略
 
 ### 格式规范
 

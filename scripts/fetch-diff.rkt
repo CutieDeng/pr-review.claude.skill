@@ -178,6 +178,12 @@
   ;; files
   (define-values (st3 files-body)
     (api-get api-base (format "/repos/~a/~a/pulls/~a/files" owner repo ref) token))
+  ;; existing review comments (inline)
+  (define-values (st4 review-comments-body)
+    (api-get api-base (format "/repos/~a/~a/pulls/~a/comments" owner repo ref) token))
+  ;; existing issue comments (conversation)
+  (define-values (st5 issue-comments-body)
+    (api-get api-base (format "/repos/~a/~a/issues/~a/comments" owner repo ref) token))
   (define result (make-hasheq))
   (hash-set! result 'type "pr")
   (hash-set! result 'meta (with-handlers ([exn:fail? (lambda (_) meta-body)])
@@ -185,6 +191,12 @@
   (hash-set! result 'diff diff-body)
   (hash-set! result 'files (with-handlers ([exn:fail? (lambda (_) files-body)])
                              (string->jsexpr files-body)))
+  (hash-set! result 'review-comments
+             (with-handlers ([exn:fail? (lambda (_) '())])
+               (string->jsexpr review-comments-body)))
+  (hash-set! result 'issue-comments
+             (with-handlers ([exn:fail? (lambda (_) '())])
+               (string->jsexpr issue-comments-body)))
   result)
 
 (define (fetch-commit-data api-base owner repo ref token)
@@ -192,6 +204,9 @@
   ;; metadata
   (define-values (st1 meta-body)
     (api-get api-base (format "/repos/~a/~a/commits/~a" owner repo ref) token))
+  ;; existing comments on this commit
+  (define-values (st-comments comments-body)
+    (api-get api-base (format "/repos/~a/~a/commits/~a/comments" owner repo ref) token))
   ;; diff + files: platform-dependent
   (define-values (diff-text files-json)
     (case platform
@@ -227,6 +242,9 @@
   (hash-set! result 'diff diff-text)
   (when files-json
     (hash-set! result 'files files-json))
+  (hash-set! result 'comments
+             (with-handlers ([exn:fail? (lambda (_) '())])
+               (string->jsexpr comments-body)))
   result)
 
 ;; ── main ─────────────────────────────────────────────────────────────

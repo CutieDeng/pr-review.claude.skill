@@ -61,6 +61,17 @@
 | `category` | symbol | `security` \| `correctness` \| `performance` \| `style` \| `docs` |
 | `rule-ref` | string 或 `#f` | 关联 config.rktd 规则 id |
 
+### reply 记录（0 到 N 条）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `section` | symbol `reply` | 记录类型标识 |
+| `id` | integer | 从 1 开始的序号 |
+| `in-reply-to` | integer | 目标评论的 API comment ID |
+| `comment-type` | symbol | `review-comment`（PR inline）\| `issue-comment`（PR 会话）\| `commit-comment` |
+| `body` | string | 回复内容 |
+| `context` | string 或 `#f` | 引用的原评论摘要（仅供阅读，不发送） |
+
 ## config.rktd
 
 ### platform 记录

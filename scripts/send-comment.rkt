@@ -239,6 +239,8 @@
 (define decision (findf (lambda (r) (section=? 'decision r)) records))
 (define all-comments
   (filter (lambda (r) (section=? 'inline-comment r)) records))
+(define all-replies
+  (filter (lambda (r) (section=? 'reply r)) records))
 
 (unless meta
   (error 'send-comment "No (section . meta) record found in ~a" (comment-file)))
@@ -269,10 +271,30 @@
 (when decision
   (define evt (get* 'event decision #f))
   (when evt (printf "Decision: ~a\n" evt)))
-(printf "Comments: ~a total (~a after filter)\n\n"
-        (length all-comments) (length comments))
+(printf "Comments: ~a total (~a after filter), ~a replies\n\n"
+        (length all-comments) (length comments) (length all-replies))
 
-;; interactive filtering
+;; interactive: confirm decision first
+(define send-decision?
+  (cond
+    [(not decision) #f]
+    [(non-interactive?) #t]
+    [else
+     (printf "\n~a Summary:\n  ~a\n"
+             (color 1 "Decision")
+             (get 'body decision))
+     (define action (prompt-action))
+     (match action
+       ['send #t]
+       ['skip #f]
+       ['edit
+        (set! decision (prompt-edit decision))
+        #t]
+       ['quit
+        (displayln "\nAborted. No comments sent.")
+        (exit 0)])]))
+
+;; interactive: filter inline comments
 (define final-comments
   (cond
     [(non-interactive?) comments]
@@ -292,7 +314,39 @@
                         (displayln "\nAborted. No comments sent.")
                         (exit 0))]))))]))
 
-(printf "\n~a: ~a comments to send\n" (color 1 "Final") (length final-comments))
+;; interactive: filter replies
+(define (display-reply r idx total)
+  (printf "\n~a [~a/~a] Reply to comment #~a\n"
+          (color 35 "REPLY")   ; magenta
+          idx total
+          (get 'in-reply-to r))
+  (printf "  ~a\n" (get 'body r)))
+
+(define final-replies
+  (cond
+    [(null? all-replies) '()]
+    [(non-interactive?) all-replies]
+    [else
+     (let loop ([rs all-replies] [idx 1] [acc '()])
+       (if (null? rs)
+           (reverse acc)
+           (let ([r (car rs)])
+             (display-reply r idx (length all-replies))
+             (define action (prompt-action))
+             (match action
+               ['send (loop (cdr rs) (add1 idx) (cons r acc))]
+               ['skip (loop (cdr rs) (add1 idx) acc)]
+               ['edit (let ([edited (prompt-edit r)])
+                        (loop (cdr rs) (add1 idx) (cons edited acc)))]
+               ['quit (begin
+                        (displayln "\nAborted. No comments sent.")
+                        (exit 0))]))))]))
+
+(printf "\n~a: ~a comments + ~a replies to send~a\n"
+        (color 1 "Final")
+        (length final-comments)
+        (length final-replies)
+        (if send-decision? " + summary" ""))
 
 ;; ── send: PR review (batch) ──────────────────────────────────────────
 
@@ -321,10 +375,22 @@
 
 (define (build-commit-comment-payload c)
   (define h (make-hasheq))
-  (hash-set! h 'body (get 'body c))
-  (when (get* 'path c)
-    (hash-set! h 'path (get 'path c))
-    (hash-set! h 'position (get 'line c)))
+  (define path (get* 'path c))
+  (define line (get* 'line c))
+  (define raw-body (get 'body c))
+  ;; GitCode v5 commit comment API ignores path/position — embed in body text
+  (define body
+    (cond
+      [(and (eq? platform 'gitcode) path line)
+       (format "**`~a:~a`**\n\n~a" path line raw-body)]
+      [(and (eq? platform 'gitcode) path)
+       (format "**`~a`**\n\n~a" path raw-body)]
+      [else raw-body]))
+  (hash-set! h 'body body)
+  ;; GitHub supports inline positioning
+  (when (and (not (eq? platform 'gitcode)) path)
+    (hash-set! h 'path path)
+    (hash-set! h 'position line))
   h)
 
 (define (send-commit-comments! final-comments)
@@ -332,8 +398,8 @@
   (cond
     [(dry-run?)
      (displayln "\n--- DRY RUN ---")
-     ;; general comment from decision body if present
-     (when decision
+     ;; general comment from decision body if confirmed
+     (when send-decision?
        (printf "POST ~a\n" api-path)
        (displayln (jsexpr->string (hasheq 'body (get 'body decision)))))
      (for ([c (in-list final-comments)])
@@ -342,8 +408,8 @@
      (displayln "--- END DRY RUN ---")]
     [else
      (define token (force current-token))
-     ;; general comment from decision body if present
-     (when decision
+     ;; general comment from decision body if confirmed
+     (when send-decision?
        (printf "Sending summary comment ...\n")
        (define-values (st rb)
          (api-call "POST" api-path (hasheq 'body (get 'body decision)) token platform))
@@ -361,9 +427,66 @@
            (printf "  ~a: ~a\n~a\n" (color 31 "Error") st rb)))
      (displayln (color 32 "Done."))]))
 
+;; ── send: replies (both PR and commit) ──────────────────────────────
+
+(define (send-replies! final-replies)
+  (unless (null? final-replies)
+    (define token (if (dry-run?) #f (force current-token)))
+    (for ([r (in-list final-replies)]
+          [i (in-naturals 1)])
+      (define comment-id (get 'in-reply-to r))
+      (define body (get 'body r))
+      (define comment-type (get* 'comment-type r 'review-comment))
+      ;; determine API path based on review-type and comment-type
+      (define api-path
+        (case review-type
+          [(pr)
+           (case comment-type
+             ;; reply to a PR review comment (inline) — uses in_reply_to field
+             [(review-comment)
+              (format "/repos/~a/~a/pulls/~a/comments" owner repo pr-number)]
+             ;; reply to a PR issue comment (conversation)
+             [(issue-comment)
+              (format "/repos/~a/~a/issues/~a/comments" owner repo pr-number)]
+             [else
+              (format "/repos/~a/~a/pulls/~a/comments" owner repo pr-number)])]
+          [(commit)
+           (format "/repos/~a/~a/commits/~a/comments" owner repo commit-sha)]
+          [else (error 'send-replies "Unknown review-type: ~a" review-type)]))
+      (define payload
+        (case comment-type
+          [(review-comment)
+           ;; PR review comment reply: needs in_reply_to
+           (hasheq 'body body 'in_reply_to comment-id)]
+          [else
+           ;; issue comment or commit comment: just body
+           (hasheq 'body body)]))
+      (cond
+        [(dry-run?)
+         (printf "POST ~a\n" api-path)
+         (displayln (jsexpr->string payload))]
+        [else
+         (printf "Sending reply [~a/~a] to comment #~a ...\n"
+                 i (length final-replies) comment-id)
+         (define-values (st rb)
+           (api-call "POST" api-path payload token platform))
+         (if (regexp-match? #rx"^HTTP/[0-9.]+ 20[01]" st)
+             (printf "  ~a\n" (color 32 "ok"))
+             (printf "  ~a: ~a\n~a\n" (color 31 "Error") st rb))]))))
+
 ;; ── dispatch ────────────────────────────────────────────────────────
+
+(when (dry-run?)
+  (when (not (null? final-replies))
+    (displayln "\n--- DRY RUN (replies) ---")))
 
 (case review-type
   [(pr)     (send-pr-review! final-comments)]
   [(commit) (send-commit-comments! final-comments)]
   [else     (error 'send-comment "Unknown review-type: ~a" review-type)])
+
+(send-replies! final-replies)
+
+(when (dry-run?)
+  (when (not (null? final-replies))
+    (displayln "--- END DRY RUN (replies) ---")))

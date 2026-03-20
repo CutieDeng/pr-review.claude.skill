@@ -55,6 +55,44 @@ Body:
 - 若使用 `line`，需同时提供 `side`
 - `event` 为 `APPROVE` 或 `REQUEST_CHANGES` 时必须有 PR 的 review 权限
 
+### 获取 PR 评论
+
+```
+# PR review comments（inline 代码评论）
+GET /repos/{owner}/{repo}/pulls/{pull_number}/comments
+
+# PR issue comments（会话级评论）
+GET /repos/{owner}/{repo}/issues/{pull_number}/comments
+```
+
+Review comment 返回字段：`id`, `user.login`, `body`, `path`, `line`, `side`, `in_reply_to_id`, `created_at`
+Issue comment 返回字段：`id`, `user.login`, `body`, `created_at`
+
+### 回复 PR 评论
+
+```
+# 回复 inline review comment — 使用 in_reply_to 字段
+POST /repos/{owner}/{repo}/pulls/{pull_number}/comments
+```
+Body:
+```json
+{
+  "body": "Reply text",
+  "in_reply_to": 12345
+}
+```
+
+```
+# 回复 issue comment（会话级）— 直接发 issue comment
+POST /repos/{owner}/{repo}/issues/{pull_number}/comments
+```
+Body:
+```json
+{
+  "body": "Reply text"
+}
+```
+
 ### Commit 元数据
 ```
 GET /repos/{owner}/{repo}/commits/{sha}
@@ -87,6 +125,12 @@ Body:
 - 每条评论单独发送，无批量 API
 - 返回 201 Created
 
+### 获取 Commit 评论
+```
+GET /repos/{owner}/{repo}/commits/{sha}/comments
+```
+返回字段：`id`, `user.login`, `body`, `path`, `position`, `created_at`
+
 ### 认证（send-comment.rkt 查找优先级）
 1. 环境变量 `GITHUB_TOKEN`
 2. 项目目录 `./.github.token`
@@ -117,6 +161,18 @@ gh api repos/{owner}/{repo}/commits/{sha} -H "Accept: application/vnd.github.v3.
 
 # 提交 commit comment
 gh api repos/{owner}/{repo}/commits/{sha}/comments -X POST -f body="..." -f path="file.rs" -F position=12
+
+# PR review comments（inline）
+gh api repos/{owner}/{repo}/pulls/{n}/comments --paginate
+
+# PR issue comments（会话）
+gh api repos/{owner}/{repo}/issues/{n}/comments --paginate
+
+# Commit comments
+gh api repos/{owner}/{repo}/commits/{sha}/comments
+
+# 回复 PR review comment
+gh api repos/{owner}/{repo}/pulls/{n}/comments -X POST -f body="..." -F in_reply_to=12345
 ```
 
 ## GitCode
