@@ -26,7 +26,7 @@ URL 可以是 PR 或 Commit 链接。
    - 其他 → 尝试作为 GitHub Enterprise 处理
 2. 从 URL path 识别类型并提取字段：
    - **PR**：`/<owner>/<repo>/pull/<number>` → `review-type: pr`
-   - **PR (GitCode)**：`/<owner>/<repo>/merge_requests/<number>` → `review-type: pr`
+   - **PR (GitCode)**：`/<owner>/<repo>/pull/<number>` → `review-type: pr`
    - **Commit**：`/<owner>/<repo>/commit/<sha>` → `review-type: commit`
 3. 若解析失败，报错并终止
 
