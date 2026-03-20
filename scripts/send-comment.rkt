@@ -490,10 +490,12 @@
   (when (not (null? final-replies))
     (displayln "\n--- DRY RUN (replies) ---")))
 
-(case review-type
-  [(pr)     (send-pr-review! final-comments)]
-  [(commit) (send-commit-comments! final-comments)]
-  [else     (error 'send-comment "Unknown review-type: ~a" review-type)])
+;; only send review/comments if there are comments or a decision to send
+(when (or (not (null? final-comments)) send-decision?)
+  (case review-type
+    [(pr)     (send-pr-review! final-comments)]
+    [(commit) (send-commit-comments! final-comments)]
+    [else     (error 'send-comment "Unknown review-type: ~a" review-type)]))
 
 (send-replies! final-replies)
 

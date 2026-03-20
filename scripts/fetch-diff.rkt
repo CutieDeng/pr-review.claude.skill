@@ -5,11 +5,16 @@
 ;; Agent 通过 Bash 调用本脚本获取 diff，token 仅在脚本内部使用，不泄漏到 Agent 交互。
 ;;
 ;; 用法：
-;;   racket fetch-diff.rkt --platform github --owner foo --repo bar --type pr --ref 42
-;;   racket fetch-diff.rkt --platform gitcode --owner foo --repo bar --type commit --ref abc123
 ;;   racket fetch-diff.rkt --url https://github.com/foo/bar/pull/42
+;;   racket fetch-diff.rkt --url https://gitcode.com/foo/bar/pull/1 --output comments
+;;   racket fetch-diff.rkt --platform github --owner foo --repo bar --type pr --ref 42
 ;;
-;; 输出：JSON 格式的 diff 数据（元数据 + files），写到 stdout
+;; --output 模式：
+;;   json      完整 JSON（默认，供程序消费）
+;;   summary   人类可读的元数据摘要
+;;   comments  已有评论列表（含 id/type/discussion_id）
+;;   files     变更文件列表
+;;   diff      原始 unified diff 文本
 
 (require net/http-client
          net/url
@@ -247,6 +252,112 @@
                (string->jsexpr comments-body)))
   result)
 
+;; ── output formatters ────────────────────────────────────────────────
+
+(require racket/list)
+
+;; safe hash-ref with nested path
+(define (jref h . keys)
+  (for/fold ([v h]) ([k (in-list keys)])
+    (if (hash? v) (hash-ref v k #f) #f)))
+
+(define (truncate s n)
+  (if (> (string-length s) n)
+      (string-append (substring s 0 n) "...")
+      s))
+
+(define (print-summary result)
+  (define meta (hash-ref result 'meta (hasheq)))
+  (define type (hash-ref result 'type "?"))
+  (printf "Type: ~a\n" type)
+  (printf "Platform: ~a\n" (current-platform))
+  (case (string->symbol type)
+    [(pr)
+     (printf "Title: ~a\n" (jref meta 'title))
+     (printf "Author: ~a\n" (jref meta 'user 'login))
+     (printf "State: ~a\n" (jref meta 'state))
+     (define body (or (jref meta 'body) ""))
+     (unless (string=? body "")
+       (printf "Body: ~a\n" (truncate body 200)))]
+    [(commit)
+     (printf "SHA: ~a\n" (jref meta 'sha))
+     (printf "Message: ~a\n" (jref meta 'commit 'message))
+     (printf "Author: ~a\n" (jref meta 'commit 'author 'name))])
+  ;; count comments
+  (define rc (hash-ref result 'review-comments '()))
+  (define ic (hash-ref result 'issue-comments '()))
+  (define cc (hash-ref result 'comments '()))
+  (when (list? rc) (printf "Review comments: ~a\n" (length rc)))
+  (when (list? ic) (printf "Issue comments: ~a\n" (length ic)))
+  (when (and (list? cc) (not (null? cc))) (printf "Commit comments: ~a\n" (length cc)))
+  ;; file count
+  (define files (or (hash-ref result 'files #f)
+                    (jref meta 'files)))
+  (when (list? files) (printf "Files changed: ~a\n" (length files))))
+
+(define (print-comments result)
+  ;; collect all comment sources
+  (define rc (let ([v (hash-ref result 'review-comments '())])
+               (if (list? v) v '())))
+  (define ic (let ([v (hash-ref result 'issue-comments '())])
+               (if (list? v) v '())))
+  (define cc (let ([v (hash-ref result 'comments '())])
+               (if (list? v) v '())))
+  (define (print-one label c idx)
+    (cond
+      [(hash? c)
+       (define user (or (jref c 'user 'login) "?"))
+       (define body (or (hash-ref c 'body #f) ""))
+       (define cid (hash-ref c 'id #f))
+       (define ctype (hash-ref c 'comment_type #f))
+       (define did (hash-ref c 'discussion_id #f))
+       (define path (hash-ref c 'path #f))
+       (define line (or (hash-ref c 'line #f) (hash-ref c 'position #f)))
+       (printf "\n[~a #~a] by ~a" label idx user)
+       (when cid (printf " (id=~a)" cid))
+       (when ctype (printf " type=~a" ctype))
+       (when did (printf " discussion=~a" did))
+       (newline)
+       (when (and path line) (printf "  ~a:~a\n" path line))
+       (when (and path (not line)) (printf "  ~a\n" path))
+       (printf "  ~a\n" (truncate body 500))]
+      [else (void)]))  ; skip non-hash entries (error responses)
+  (unless (null? rc)
+    (printf "── Review Comments (~a) ──\n" (length rc))
+    (for ([c (in-list rc)] [i (in-naturals 1)])
+      (print-one "RC" c i)))
+  (unless (null? ic)
+    (printf "\n── Issue Comments (~a) ──\n" (length ic))
+    (for ([c (in-list ic)] [i (in-naturals 1)])
+      (print-one "IC" c i)))
+  (unless (null? cc)
+    (printf "\n── Commit Comments (~a) ──\n" (length cc))
+    (for ([c (in-list cc)] [i (in-naturals 1)])
+      (print-one "CC" c i))))
+
+(define (print-files result)
+  (define files (or (hash-ref result 'files #f)
+                    (let ([m (hash-ref result 'meta (hasheq))])
+                      (if (hash? m) (hash-ref m 'files #f) #f))))
+  (cond
+    [(list? files)
+     (for ([f (in-list files)])
+       (when (hash? f)
+         (define name (or (hash-ref f 'filename #f) (hash-ref f 'name #f) "?"))
+         (define status (hash-ref f 'status #f))
+         (define adds (hash-ref f 'additions #f))
+         (define dels (hash-ref f 'deletions #f))
+         (printf "~a" name)
+         (when status (printf " [~a]" status))
+         (when (and adds dels) (printf " +~a/-~a" adds dels))
+         (newline)))]
+    [else (displayln "No file data available.")]))
+
+(define (print-diff result)
+  (define diff (hash-ref result 'diff ""))
+  (display diff)
+  (unless (string=? diff "") (newline)))
+
 ;; ── main ─────────────────────────────────────────────────────────────
 
 (define opt-platform  (make-parameter #f))
@@ -255,6 +366,7 @@
 (define opt-type      (make-parameter #f))   ; "pr" or "commit"
 (define opt-ref       (make-parameter #f))   ; pr number or commit sha
 (define opt-url       (make-parameter #f))
+(define opt-output    (make-parameter "json")) ; json | summary | comments | files | diff
 
 (command-line
  #:program "fetch-diff"
@@ -265,6 +377,7 @@
  ["--type" t "Review type: pr or commit" (opt-type t)]
  ["--ref" ref "PR number or commit SHA" (opt-ref ref)]
  ["--url" u "Full PR/commit URL (auto-parses all fields)" (opt-url u)]
+ ["--output" o "Output mode: json|summary|comments|files|diff (default: json)" (opt-output o)]
  #:args () (void))
 
 ;; resolve from URL if provided
@@ -291,5 +404,10 @@
     [(commit) (fetch-commit-data api-base (opt-owner) (opt-repo) (opt-ref) token)]
     [else     (error 'fetch-diff "Unknown type: ~a" (opt-type))]))
 
-(write-json result)
-(newline)
+(case (string->symbol (opt-output))
+  [(json)     (write-json result) (newline)]
+  [(summary)  (print-summary result)]
+  [(comments) (print-comments result)]
+  [(files)    (print-files result)]
+  [(diff)     (print-diff result)]
+  [else       (error 'fetch-diff "Unknown output mode: ~a. Use json|summary|comments|files|diff" (opt-output))])

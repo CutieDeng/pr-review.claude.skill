@@ -75,54 +75,30 @@ URL 可以是 PR 或 Commit 链接。
 
 ## 数据获取
 
-### GitHub — PR
-
-优先使用 `gh` CLI（已认证，无需额外 token）：
+统一使用 `scripts/fetch-diff.rkt`。该脚本内部处理认证和平台差异，agent 只需调用命令行：
 
 ```bash
-# PR 元数据
-gh api repos/{owner}/{repo}/pulls/{pr-number}
+# 元数据摘要（人类可读）
+racket scripts/fetch-diff.rkt --url <URL> --output summary
 
-# PR diff（raw 格式）
-gh api repos/{owner}/{repo}/pulls/{pr-number} -H "Accept: application/vnd.github.v3.diff"
+# 已有评论列表（含 id、type、discussion_id）
+racket scripts/fetch-diff.rkt --url <URL> --output comments
 
-# PR 文件列表
-gh api repos/{owner}/{repo}/pulls/{pr-number}/files --paginate
+# 变更文件列表
+racket scripts/fetch-diff.rkt --url <URL> --output files
 
-# 已有 review comments（inline 代码评论）
-gh api repos/{owner}/{repo}/pulls/{pr-number}/comments --paginate
+# 原始 unified diff
+racket scripts/fetch-diff.rkt --url <URL> --output diff
 
-# 已有 issue comments（会话级评论）
-gh api repos/{owner}/{repo}/issues/{pr-number}/comments --paginate
+# 完整 JSON（供程序消费，默认）
+racket scripts/fetch-diff.rkt --url <URL> --output json
 ```
 
-若 `gh` 不可用，fallback 到 WebFetch + `GITHUB_TOKEN`。
+按需选择 `--output` 模式，避免拉取全量 JSON 后再用外部脚本解析。
 
-### GitHub — Commit
+### 底层 API 端点（参考）
 
-```bash
-# Commit 元数据 + diff
-gh api repos/{owner}/{repo}/commits/{sha}
-
-# Commit diff（raw 格式）
-gh api repos/{owner}/{repo}/commits/{sha} -H "Accept: application/vnd.github.v3.diff"
-
-# 已有 commit comments
-gh api repos/{owner}/{repo}/commits/{sha}/comments
-```
-
-返回的 JSON 中 `files[]` 包含每个文件的 `filename`、`status`、`patch` 等信息，与 PR files 格式一致。
-
-### GitCode
-
-使用 WebFetch 调用 REST API：
-```
-GET {api-base}/repos/{owner}/{repo}/pulls/{pr-number}
-GET {api-base}/repos/{owner}/{repo}/pulls/{pr-number}/files
-GET {api-base}/repos/{owner}/{repo}/pulls/{pr-number}/comments
-GET {api-base}/repos/{owner}/{repo}/commits/{sha}
-GET {api-base}/repos/{owner}/{repo}/commits/{sha}/comments
-```
+`fetch-diff.rkt` 内部调用的端点见 `references/api-reference.md`。agent 不直接调用这些 API——统一通过脚本访问。
 
 ## 加载配置
 
@@ -435,6 +411,10 @@ Agent 获取 PR 数据时仅使用以下方式：
 4. Fallback：`gh auth token`（仅 GitHub）
 
 Token 文件应为纯文本，内容仅含 token 字符串。建议加入 `.gitignore`。
+
+## 脚本语言约束
+
+所有 ad-hoc 脚本和数据处理代码必须使用 **Racket** 编写。禁止使用 Python 或其他语言进行中间数据处理（如 JSON 解析、格式转换等）。常用操作应优先集成到 `fetch-diff.rkt` 的 `--output` 模式中，避免管道拼接。
 
 ## 错误处理
 
