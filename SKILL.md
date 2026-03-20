@@ -73,25 +73,31 @@ URL 可以是 PR 或 Commit 链接。
    - **Commit**：`/<owner>/<repo>/commit/<sha>` → `review-type: commit`
 5. 若解析失败，报错并终止
 
+## 路径约定
+
+本 SKILL 的脚本和参考文件位于 SKILL 安装目录下（即 `SKILL.md` 所在目录），**不一定是当前工作目录**。引用脚本时必须使用 SKILL 目录的绝对路径。
+
+在本文档中，`$SKILL_DIR` 代表 SKILL 安装目录。agent 执行时应从 SKILL.md 的 `Base directory` 获取该路径。
+
 ## 数据获取
 
-统一使用 `scripts/fetch-diff.rkt`。该脚本内部处理认证和平台差异，agent 只需调用命令行：
+统一使用 `$SKILL_DIR/scripts/fetch-diff.rkt`。该脚本内部处理认证和平台差异，agent 只需调用命令行：
 
 ```bash
 # 元数据摘要（人类可读）
-racket scripts/fetch-diff.rkt --url <URL> --output summary
+racket $SKILL_DIR/scripts/fetch-diff.rkt --url <URL> --output summary
 
 # 已有评论列表（含 id、type、discussion_id）
-racket scripts/fetch-diff.rkt --url <URL> --output comments
+racket $SKILL_DIR/scripts/fetch-diff.rkt --url <URL> --output comments
 
 # 变更文件列表
-racket scripts/fetch-diff.rkt --url <URL> --output files
+racket $SKILL_DIR/scripts/fetch-diff.rkt --url <URL> --output files
 
 # 原始 unified diff
-racket scripts/fetch-diff.rkt --url <URL> --output diff
+racket $SKILL_DIR/scripts/fetch-diff.rkt --url <URL> --output diff
 
 # 完整 JSON（供程序消费，默认）
-racket scripts/fetch-diff.rkt --url <URL> --output json
+racket $SKILL_DIR/scripts/fetch-diff.rkt --url <URL> --output json
 ```
 
 按需选择 `--output` 模式，避免拉取全量 JSON 后再用外部脚本解析。
@@ -299,7 +305,7 @@ fetch-diff 返回的 JSON 中包含已有评论数据：
 
 ## 生成 send-comment.rkt
 
-直接将本 skill 目录下 `scripts/send-comment.rkt` 复制到项目根目录（或告知用户直接运行 `racket ~/.claude/skills/pr-review/scripts/send-comment.rkt --file <path>`）。
+告知用户直接运行 `$SKILL_DIR/scripts/send-comment.rkt`。
 
 脚本需包含：
 - 硬编码的 `comment.rktd` 路径（项目根目录）
@@ -307,10 +313,10 @@ fetch-diff 返回的 JSON 中包含已有评论数据：
 
 生成后告知用户可用命令：
 ```bash
-racket send-comment.rkt                    # 交互式发送
-racket send-comment.rkt --dry-run          # 仅预览 API 调用
-racket send-comment.rkt --non-interactive  # 直接全部发送
-racket send-comment.rkt --skip-nitpicks    # 跳过 nitpick 级别
+racket $SKILL_DIR/scripts/send-comment.rkt                    # 交互式发送
+racket $SKILL_DIR/scripts/send-comment.rkt --dry-run          # 仅预览 API 调用
+racket $SKILL_DIR/scripts/send-comment.rkt --non-interactive  # 直接全部发送
+racket $SKILL_DIR/scripts/send-comment.rkt --skip-nitpicks    # 跳过 nitpick 级别
 ```
 
 ## 存档
@@ -360,9 +366,9 @@ racket send-comment.rkt --skip-nitpicks    # 跳过 nitpick 级别
 
 通用使用方式：
 ```bash
-racket send-comment.rkt                    # 交互式发送
-racket send-comment.rkt --dry-run          # 仅预览 API 调用
-racket send-comment.rkt --non-interactive  # 直接全部发送
+racket $SKILL_DIR/scripts/send-comment.rkt                    # 交互式发送
+racket $SKILL_DIR/scripts/send-comment.rkt --dry-run          # 仅预览 API 调用
+racket $SKILL_DIR/scripts/send-comment.rkt --non-interactive  # 直接全部发送
 ```
 
 ## 交互模式（--interactive）
@@ -430,10 +436,13 @@ Token 文件应为纯文本，内容仅含 token 字符串。建议加入 `.giti
 
 ## 参考文件
 
+以下文件均位于 `$SKILL_DIR/` 下：
+
 - `references/rktd-schemas.md` — comment/config/preferences 完整 schema
 - `references/api-reference.md` — GitHub/GitCode API 端点
 - `examples/comment-example.rktd` — PR review 输出示例
 - `examples/commit-comment-example.rktd` — Commit review 输出示例
 - `examples/config-example.rktd` — 配置示例
 - `examples/preferences-example.rktd` — 偏好示例
-- `scripts/send-comment.rkt` — 发送脚本模板
+- `scripts/fetch-diff.rkt` — 数据获取脚本
+- `scripts/send-comment.rkt` — 评论发送脚本
