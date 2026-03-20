@@ -107,58 +107,86 @@ GET {api-base}/repos/{owner}/{repo}/commits/{sha}
 
 ## 生成 comment.rktd
 
-在项目根目录生成 `comment.rktd`，格式为 flat alist 多记录。
+在项目根目录生成 `comment.rktd`。每条记录使用**多行缩进格式**，记录间空行分隔，关键闭括号加注释辅助匹配。
+
+`read-all` 天然支持多行 S-expression，无需单行压缩。
 
 ### PR review 格式
 
 ```racket
-;; meta 记录
+;; ── meta ──
 ((section . meta)
  (review-type . pr)
  (pr-url . "https://github.com/owner/repo/pull/42")
  (platform . github)
- (owner . "owner") (repo . "repo") (pr-number . 42)
- (pr-title . "PR title here") (pr-author . "alice")
- (reviewed-at . "2026-03-19T10:30:00Z"))
+ (owner . "owner")
+ (repo . "repo")
+ (pr-number . 42)
+ (pr-title . "PR title here")
+ (pr-author . "alice")
+ (reviewed-at . "2026-03-19T10:30:00Z")
+) ;; end meta
 
-;; 决策记录（仅 PR）
+;; ── decision ──
 ((section . decision)
  (event . "REQUEST_CHANGES")   ; "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
- (body . "Overall summary of the review..."))
+ (body . "Overall summary of the review...")
+) ;; end decision
 
-;; inline 评论（每条一个记录）
+;; ── inline #1 ──
 ((section . inline-comment)
- (id . 1) (path . "src/foo.rs") (line . 45) (side . "RIGHT")
+ (id . 1)
+ (path . "src/foo.rs")
+ (line . 45)
+ (side . "RIGHT")
  (body . "具体评论内容...")
  (severity . critical)
  (category . security)
- (rule-ref . "no-sql-injection"))
+ (rule-ref . "no-sql-injection")
+) ;; end inline #1
 ```
 
 ### Commit review 格式
 
 ```racket
-;; meta 记录
+;; ── meta ──
 ((section . meta)
  (review-type . commit)
  (commit-url . "https://github.com/owner/repo/commit/abc1234")
  (platform . github)
- (owner . "owner") (repo . "repo") (commit-sha . "abc1234def5678...")
- (commit-message . "Fix something") (commit-author . "bob")
- (reviewed-at . "2026-03-19T10:30:00Z"))
+ (owner . "owner")
+ (repo . "repo")
+ (commit-sha . "abc1234def5678...")
+ (commit-message . "Fix something")
+ (commit-author . "bob")
+ (reviewed-at . "2026-03-19T10:30:00Z")
+) ;; end meta
 
-;; 决策记录（commit 可选；若提供，body 作为总结评论单独发送）
+;; ── decision（commit 可选；若提供，body 作为总结评论单独发送）──
 ((section . decision)
- (body . "Overall summary of the commit review..."))
+ (body . "Overall summary of the commit review...")
+) ;; end decision
 
-;; inline 评论（与 PR 格式一致）
+;; ── inline #1 ──
 ((section . inline-comment)
- (id . 1) (path . "src/foo.rs") (line . 12) (side . "RIGHT")
+ (id . 1)
+ (path . "src/foo.rs")
+ (line . 12)
+ (side . "RIGHT")
  (body . "具体评论内容...")
  (severity . warning)
  (category . correctness)
- (rule-ref . #f))
+ (rule-ref . #f)
+) ;; end inline #1
 ```
+
+### 格式规范
+
+- 每个 key-value pair 独占一行，1 空格缩进
+- 记录末尾 `)` 独占一行，跟 `;; end <section>` 注释
+- 记录间空一行，用 `;; ── section ──` 分隔头
+- `body` 值中的换行用 `\n` 转义（Racket `read` 会还原）
+- **不要**单行压缩——可读性优先
 
 ### 字段说明
 
@@ -175,8 +203,6 @@ GET {api-base}/repos/{owner}/{repo}/commits/{sha}
 - `severity`：`critical` | `warning` | `suggestion` | `nitpick`
 - `category`：`security` | `correctness` | `performance` | `style` | `docs`
 - `rule-ref`：关联 config.rktd 规则 id，或 `#f`
-
-使用 `writeln` 写入每条记录，确保每行一条。
 
 ## 生成 send-comment.rkt
 
