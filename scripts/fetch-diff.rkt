@@ -143,7 +143,7 @@
   (define platform
     (cond
       [(regexp-match? #rx"github\\.com" host) 'github]
-      [(regexp-match? #rx"gitcode\\.com" host) 'gitcode]
+      [(regexp-match? #rx"gitcode\\.com|atomgit\\.com" host) 'gitcode]
       [else 'github]))  ; assume GHE
   (match parts
     ;; /<owner>/<repo>/pull/<number>

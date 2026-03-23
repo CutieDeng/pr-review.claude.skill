@@ -65,7 +65,7 @@ URL 可以是 PR 或 Commit 链接。
 2. 提取 `--interactive`：reply 模式默认开启，其他模式手动开启
 3. 解析 URL hostname 识别平台：
    - `github.com` → platform `github`
-   - `gitcode.com` → platform `gitcode`
+   - `gitcode.com` / `atomgit.com` → platform `gitcode`
    - 其他 → 尝试作为 GitHub Enterprise 处理
 4. 从 URL path 识别类型并提取字段：
    - **PR**：`/<owner>/<repo>/pull/<number>` → `review-type: pr`
