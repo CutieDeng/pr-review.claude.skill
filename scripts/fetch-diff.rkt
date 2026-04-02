@@ -73,9 +73,10 @@
     (or (getenv (current-token-env))
         (find-token-file (current-token-file))
         (run-fallback-cmd (current-token-fallback-cmd))
-        (error 'current-token
-               "No auth found. Set ~a, create ~a, or configure fallback."
-               (current-token-env) (current-token-file)))))
+        (begin
+          (eprintf "Warning: No auth found (checked ~a, ~a, fallback cmd). Proceeding without token — public repos only, rate limits apply.\n"
+                   (current-token-env) (current-token-file))
+          #f))))
 
 ;; ── HTTP ─────────────────────────────────────────────────────────────
 
@@ -84,15 +85,15 @@
 
 ;; Auth via Authorization header for both platforms (aligned with gitcode_mcp_server)
 (define (auth-headers token platform)
-  (case platform
-    [(gitcode)
-     (list (format "Authorization: Bearer ~a" token)
-           "Accept: application/json"
-           "User-Agent: pr-review-rkt")]
-    [else
-     (list (format "Authorization: token ~a" token)
-           "Accept: application/json"
-           "User-Agent: pr-review-rkt")]))
+  (define base (list "Accept: application/json"
+                     "User-Agent: pr-review-rkt"))
+  (if (not token)
+      base
+      (case platform
+        [(gitcode)
+         (cons (format "Authorization: Bearer ~a" token) base)]
+        [else
+         (cons (format "Authorization: token ~a" token) base)])))
 
 (define (api-get api-base path token)
   (define platform (current-platform))
@@ -113,16 +114,16 @@
   (define u (string->url (string-append api-base path)))
   (define host (url-host u))
   (define request-path (url->string (struct-copy url u [scheme #f] [host #f] [port #f])))
+  (define base (list (format "Accept: ~a" accept)
+                     "User-Agent: pr-review-rkt"))
   (define headers
-    (case platform
-      [(gitcode)
-       (list (format "Authorization: Bearer ~a" token)
-             (format "Accept: ~a" accept)
-             "User-Agent: pr-review-rkt")]
-      [else
-       (list (format "Authorization: token ~a" token)
-             (format "Accept: ~a" accept)
-             "User-Agent: pr-review-rkt")]))
+    (if (not token)
+        base
+        (case platform
+          [(gitcode)
+           (cons (format "Authorization: Bearer ~a" token) base)]
+          [else
+           (cons (format "Authorization: token ~a" token) base)])))
   (define-values (status _headers resp-port)
     (http-sendrecv host request-path
                    #:ssl? #t
