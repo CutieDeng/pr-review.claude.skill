@@ -17,7 +17,7 @@ In Claude Code:
 ```
 
 This will:
-1. Fetch PR diff via `gh api` or WebFetch
+1. Fetch PR/commit diff via `fetch-diff.rkt` (GitHub & GitCode API)
 2. Analyze changes against configured rules
 3. Generate `comment.rktd` (structured review data)
 4. Provide `send-comment.rkt` for submitting comments
@@ -41,10 +41,20 @@ racket ~/.claude/skills/pr-review/scripts/send-comment.rkt --file comment.rktd -
 ## Structure
 
 ```
-SKILL.md                  # Skill definition
-scripts/send-comment.rkt  # Interactive comment sender
-references/               # Schema docs, API reference
-examples/                 # Sample .rktd files
+SKILL.md                                # Skill definition
+scripts/
+  fetch-diff.rkt                        # Fetch PR/commit diff from GitHub/GitCode API
+  send-comment.rkt                      # Interactive comment sender
+docs/
+  gitcode-token.md                      # GitCode token setup guide
+references/
+  api-reference.md                      # GitHub/GitCode API reference
+  rktd-schemas.md                       # comment.rktd schema docs
+examples/
+  comment-example.rktd                  # PR inline comment example
+  commit-comment-example.rktd           # Commit comment example
+  config-example.rktd                   # Config file example
+  preferences-example.rktd              # Preferences file example
 ```
 
 Per-project `reviews/` directory is created on first run (not part of this repo).
