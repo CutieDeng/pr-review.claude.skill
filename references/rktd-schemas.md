@@ -12,7 +12,7 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `section` | symbol `meta` | 记录类型标识 |
-| `review-type` | symbol | `pr` \| `commit` |
+| `review-type` | symbol | `pr` \| `commit` \| `issue` |
 | `platform` | symbol | `github` \| `gitcode` |
 | `owner` | string | 仓库所有者 |
 | `repo` | string | 仓库名 |
@@ -72,6 +72,33 @@
 | `discussion-id` | string 或 `#f` | GitCode 专用：讨论 ID（从 PR 评论的 `discussion_id` 字段获取）。GitCode 回复必需，GitHub 忽略 |
 | `body` | string | 回复内容 |
 | `context` | string 或 `#f` | 引用的原评论摘要（仅供阅读，不发送） |
+
+### issue 记录（0 到 N 条）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `section` | symbol `issue` | 记录类型标识 |
+| `id` | integer | 从 1 开始的序号 |
+| `title` | string | Issue 标题（必填） |
+| `body` | string | Issue 正文，支持 Markdown（必填） |
+| `labels` | list of strings | 标签列表（可选，默认空） |
+| `assignees` | list of strings | 指派人列表（可选，默认空） |
+| `milestone` | integer 或 `#f` | 里程碑编号（可选） |
+| `source-context` | string 或 `#f` | 来源上下文（仅供阅读，不发送） |
+
+### issue-update 记录（0 到 N 条）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `section` | symbol `issue-update` | 记录类型标识 |
+| `id` | integer | 从 1 开始的序号 |
+| `issue-number` | integer | 目标 Issue 编号（必填） |
+| `state` | symbol | `open` \| `closed`（可选） |
+| `state-reason` | symbol | `completed` \| `not_planned` \| `reopened`（可选，仅 GitHub） |
+| `title` | string 或 `#f` | 新标题（可选） |
+| `body` | string 或 `#f` | 新正文（可选） |
+| `labels` | list of strings 或 `#f` | 新标签列表（可选，覆盖式） |
+| `assignees` | list of strings 或 `#f` | 新指派人列表（可选，覆盖式） |
 
 ## config.rktd
 

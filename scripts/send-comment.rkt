@@ -236,6 +236,10 @@
   (filter (lambda (r) (section=? 'inline-comment r)) records))
 (define all-replies
   (filter (lambda (r) (section=? 'reply r)) records))
+(define all-issues
+  (filter (lambda (r) (section=? 'issue r)) records))
+(define all-issue-updates
+  (filter (lambda (r) (section=? 'issue-update r)) records))
 
 (unless meta
   (error 'send-comment "No (section . meta) record found in ~a" (comment-file)))
@@ -260,14 +264,16 @@
   (case review-type
     [(pr)     (format "~a/~a#~a" owner repo pr-number)]
     [(commit) (format "~a/~a@~a" owner repo (substring (~a commit-sha) 0 (min 7 (string-length (~a commit-sha)))))]
+    [(issue)  (format "~a/~a (new issues)" owner repo)]
     [else     (format "~a/~a" owner repo)]))
 
 (printf "\n~a Review: ~a\n" (color 1 (string-upcase (~a review-type))) target-label)
 (when decision
   (define evt (get* 'event decision #f))
   (when evt (printf "Decision: ~a\n" evt)))
-(printf "Comments: ~a total (~a after filter), ~a replies\n\n"
-        (length all-comments) (length comments) (length all-replies))
+(printf "Comments: ~a total (~a after filter), ~a replies, ~a issues, ~a issue-updates\n\n"
+        (length all-comments) (length comments) (length all-replies)
+        (length all-issues) (length all-issue-updates))
 
 ;; interactive: confirm decision first
 (define send-decision?
@@ -337,10 +343,107 @@
                         (displayln "\nAborted. No comments sent.")
                         (exit 0))]))))]))
 
-(printf "\n~a: ~a comments + ~a replies to send~a\n"
+;; interactive: filter issues
+(define (display-issue iss idx total)
+  (printf "\n~a [~a/~a] ~a\n"
+          (color 34 "ISSUE")   ; blue
+          idx total
+          (get 'title iss))
+  (define labels (get* 'labels iss '()))
+  (when (and (list? labels) (not (null? labels)))
+    (printf "  Labels: ~a\n" (string-join (map ~a labels) ", ")))
+  (define assignees (get* 'assignees iss '()))
+  (when (and (list? assignees) (not (null? assignees)))
+    (printf "  Assignees: ~a\n" (string-join (map ~a assignees) ", ")))
+  (printf "  ~a\n" (get 'body iss)))
+
+(define (prompt-edit-issue iss)
+  (printf "  Current title: ~a\n" (get 'title iss))
+  (display "  New title (enter to keep): ")
+  (flush-output)
+  (define title-line (read-line))
+  (define iss2
+    (if (or (eof-object? title-line) (string=? (string-trim title-line) ""))
+        iss
+        (map (lambda (pair)
+               (if (eq? (car pair) 'title)
+                   (cons 'title (string-trim title-line))
+                   pair))
+             iss)))
+  (printf "  Current body:\n  ~a\n" (get 'body iss2))
+  (display "  New body (enter to keep): ")
+  (flush-output)
+  (define body-line (read-line))
+  (if (or (eof-object? body-line) (string=? (string-trim body-line) ""))
+      iss2
+      (map (lambda (pair)
+             (if (eq? (car pair) 'body)
+                 (cons 'body (string-trim body-line))
+                 pair))
+           iss2)))
+
+(define final-issues
+  (cond
+    [(null? all-issues) '()]
+    [(non-interactive?) all-issues]
+    [else
+     (let loop ([is all-issues] [idx 1] [acc '()])
+       (if (null? is)
+           (reverse acc)
+           (let ([iss (car is)])
+             (display-issue iss idx (length all-issues))
+             (define action (prompt-action))
+             (match action
+               ['send (loop (cdr is) (add1 idx) (cons iss acc))]
+               ['skip (loop (cdr is) (add1 idx) acc)]
+               ['edit (let ([edited (prompt-edit-issue iss)])
+                        (loop (cdr is) (add1 idx) (cons edited acc)))]
+               ['quit (begin
+                        (displayln "\nAborted. Nothing sent.")
+                        (exit 0))]))))]))
+
+;; interactive: filter issue-updates
+(define (display-issue-update upd idx total)
+  (define issue-num (get 'issue-number upd))
+  (define state (get* 'state upd #f))
+  (define state-reason (get* 'state-reason upd #f))
+  (printf "\n~a [~a/~a] Issue #~a"
+          (color 33 "UPDATE")   ; yellow
+          idx total
+          issue-num)
+  (when state (printf " → ~a" state))
+  (when state-reason (printf " (~a)" state-reason))
+  (newline)
+  (when (get* 'title upd #f)
+    (printf "  New title: ~a\n" (get* 'title upd)))
+  (when (get* 'body upd #f)
+    (printf "  New body: ~a\n" (get* 'body upd))))
+
+(define final-issue-updates
+  (cond
+    [(null? all-issue-updates) '()]
+    [(non-interactive?) all-issue-updates]
+    [else
+     (let loop ([us all-issue-updates] [idx 1] [acc '()])
+       (if (null? us)
+           (reverse acc)
+           (let ([u (car us)])
+             (display-issue-update u idx (length all-issue-updates))
+             (define action (prompt-action))
+             (match action
+               ['send (loop (cdr us) (add1 idx) (cons u acc))]
+               ['skip (loop (cdr us) (add1 idx) acc)]
+               ['edit (loop (cdr us) (add1 idx) (cons u acc))]  ; edit not meaningful for state changes
+               ['quit (begin
+                        (displayln "\nAborted. Nothing sent.")
+                        (exit 0))]))))]))
+
+(printf "\n~a: ~a comments + ~a replies + ~a issues + ~a updates to send~a\n"
         (color 1 "Final")
         (length final-comments)
         (length final-replies)
+        (length final-issues)
+        (length final-issue-updates)
         (if send-decision? " + summary" ""))
 
 ;; ── send: PR review (batch) ──────────────────────────────────────────
@@ -526,6 +629,96 @@
              (printf "  ~a\n" (color 32 "ok"))
              (printf "  ~a: ~a\n~a\n" (color 31 "Error") st rb))]))))
 
+;; ── send: issues ────────────────────────────────────────────────────
+
+(define (build-issue-payload iss)
+  (define h (make-hasheq))
+  (hash-set! h 'title (get 'title iss))
+  (hash-set! h 'body (get 'body iss))
+  (define labels (get* 'labels iss '()))
+  (when (and (list? labels) (not (null? labels)))
+    (hash-set! h 'labels (map ~a labels)))
+  (define assignees (get* 'assignees iss '()))
+  (when (and (list? assignees) (not (null? assignees)))
+    (hash-set! h 'assignees (map ~a assignees)))
+  (define milestone (get* 'milestone iss #f))
+  (when milestone
+    (hash-set! h 'milestone milestone))
+  h)
+
+(define (send-issues! issues)
+  (unless (null? issues)
+    (define api-path (format "/repos/~a/~a/issues" owner repo))
+    (cond
+      [(dry-run?)
+       (displayln "\n--- DRY RUN (issues) ---")
+       (for ([iss (in-list issues)] [i (in-naturals 1)])
+         (printf "POST ~a  [issue ~a/~a] ~a\n" api-path i (length issues) (get 'title iss))
+         (displayln (jsexpr->string (build-issue-payload iss))))
+       (displayln "--- END DRY RUN (issues) ---")]
+      [else
+       (define token (force current-token))
+       (for ([iss (in-list issues)] [i (in-naturals 1)])
+         (printf "Creating issue [~a/~a] \"~a\" ...\n" i (length issues) (get 'title iss))
+         (define-values (st rb)
+           (api-call "POST" api-path (build-issue-payload iss) token platform))
+         (if (regexp-match? #rx"^HTTP/[0-9.]+ 201" st)
+             (let ([resp (string->jsexpr rb)])
+               (printf "  ~a ~a\n"
+                       (color 32 "Created:")
+                       (hash-ref resp 'html_url (hash-ref resp 'url "ok"))))
+             (printf "  ~a: ~a\n~a\n" (color 31 "Error") st rb)))])))
+
+;; ── send: issue updates ──────────────────────────────────────────────
+
+(define (build-issue-update-payload upd)
+  (define h (make-hasheq))
+  (define state (get* 'state upd #f))
+  (when state (hash-set! h 'state (~a state)))
+  (define state-reason (get* 'state-reason upd #f))
+  (when state-reason (hash-set! h 'state_reason (~a state-reason)))
+  (define title (get* 'title upd #f))
+  (when title (hash-set! h 'title title))
+  (define body (get* 'body upd #f))
+  (when body (hash-set! h 'body body))
+  (define labels (get* 'labels upd #f))
+  (when (and labels (list? labels) (not (null? labels)))
+    (hash-set! h 'labels (map ~a labels)))
+  (define assignees (get* 'assignees upd #f))
+  (when (and assignees (list? assignees))
+    (hash-set! h 'assignees (map ~a assignees)))
+  h)
+
+(define (send-issue-updates! updates)
+  (unless (null? updates)
+    (cond
+      [(dry-run?)
+       (displayln "\n--- DRY RUN (issue-updates) ---")
+       (for ([upd (in-list updates)] [i (in-naturals 1)])
+         (define issue-num (get 'issue-number upd))
+         (define api-path (format "/repos/~a/~a/issues/~a" owner repo issue-num))
+         (printf "PATCH ~a  [update ~a/~a]\n" api-path i (length updates))
+         (displayln (jsexpr->string (build-issue-update-payload upd))))
+       (displayln "--- END DRY RUN (issue-updates) ---")]
+      [else
+       (define token (force current-token))
+       (for ([upd (in-list updates)] [i (in-naturals 1)])
+         (define issue-num (get 'issue-number upd))
+         (define api-path (format "/repos/~a/~a/issues/~a" owner repo issue-num))
+         (define state (get* 'state upd #f))
+         (printf "Updating issue #~a [~a/~a]~a ...\n"
+                 issue-num i (length updates)
+                 (if state (format " → ~a" state) ""))
+         (define-values (st rb)
+           (api-call "PATCH" api-path (build-issue-update-payload upd) token platform))
+         (if (regexp-match? #rx"^HTTP/[0-9.]+ 200" st)
+             (let ([resp (string->jsexpr rb)])
+               (printf "  ~a #~a (~a)\n"
+                       (color 32 "Updated:")
+                       (hash-ref resp 'number issue-num)
+                       (hash-ref resp 'state "ok")))
+             (printf "  ~a: ~a\n~a\n" (color 31 "Error") st rb)))])))
+
 ;; ── dispatch ────────────────────────────────────────────────────────
 
 (when (dry-run?)
@@ -537,9 +730,12 @@
   (case review-type
     [(pr)     (send-pr-review! final-comments)]
     [(commit) (send-commit-comments! final-comments)]
+    [(issue)  (void)]  ; issue-only mode has no review comments
     [else     (error 'send-comment "Unknown review-type: ~a" review-type)]))
 
 (send-replies! final-replies)
+(send-issues! final-issues)
+(send-issue-updates! final-issue-updates)
 
 (when (dry-run?)
   (when (not (null? final-replies))
