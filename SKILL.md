@@ -138,14 +138,14 @@ racket $SKILL_DIR/scripts/fetch-diff.rkt --url <URL> --output json
 
 从**使用方项目**的根目录加载（不存在则初始化）：
 
-1. 检查项目根目录是否存在 `reviews/` 目录
-2. 若不存在，创建 `reviews/` 并从本 skill 的 `examples/config-example.rktd` 复制为 `reviews/config.rktd`，同时创建 `reviews/history/`
+1. 检查项目根目录是否存在 `.skill.pr-review.history/` 目录
+2. 若不存在，创建 `.skill.pr-review.history/` 并从本 skill 的 `examples/config-example.rktd` 复制为 `.skill.pr-review.history/config.rktd`，同时创建 `.skill.pr-review.history/history/`
 3. 加载：
-   - `reviews/config.rktd` — review 规则和平台配置
-   - `reviews/preferences.rktd` — 用户偏好（severity 接受率、风格偏好），可能不存在
-   - `reviews/history/` — 最近 3 条同仓库历史 review，用于保持一致性
+   - `.skill.pr-review.history/config.rktd` — review 规则和平台配置
+   - `.skill.pr-review.history/preferences.rktd` — 用户偏好（severity 接受率、风格偏好），可能不存在
+   - `.skill.pr-review.history/history/` — 最近 3 条同仓库历史 review，用于保持一致性
 
-注意：`reviews/` 是 per-project 运行时目录，不属于本 skill 仓库。
+注意：`.skill.pr-review.history/` 是 per-project 运行时目录，不属于本 skill 仓库。
 
 参考 `references/rktd-schemas.md` 了解完整 schema。
 
@@ -388,7 +388,7 @@ racket $SKILL_DIR/scripts/send-comment.rkt --skip-nitpicks    # 跳过 nitpick �
 
 ## 存档
 
-将 `comment.rktd` 复制到 `reviews/history/` 下：
+将 `comment.rktd` 复制到 `.skill.pr-review.history/history/` 下：
 - PR：`<pr-number>-<timestamp>.rktd`
 - Commit：`<sha-prefix-7>-<timestamp>.rktd`
 
@@ -479,7 +479,7 @@ racket $SKILL_DIR/scripts/send-comment.rkt --non-interactive  # 直接全部发�
 
 ## 偏好学习
 
-每次 review 完成后（send-comment.rkt 执行后），更新 `reviews/preferences.rktd`：
+每次 review 完成后（send-comment.rkt 执行后），更新 `.skill.pr-review.history/preferences.rktd`：
 
 - 统计用户在交互模式中 accept/skip 的比率，按 severity 更新 `severity-stats`
 - 记录用户手动编辑评论的模式，更新 `style-preference`

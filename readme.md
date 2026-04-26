@@ -57,4 +57,4 @@ examples/
   preferences-example.rktd              # Preferences file example
 ```
 
-Per-project `reviews/` directory is created on first run (not part of this repo).
+Per-project `.skill.pr-review.history/` directory is created on first run (not part of this repo).
