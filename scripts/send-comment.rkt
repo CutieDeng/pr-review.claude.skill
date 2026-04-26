@@ -3,6 +3,7 @@
 
 (require net/http-client
          net/url
+         net/uri-codec
          json
          racket/string
          racket/port
@@ -97,19 +98,37 @@
     [(gitcode) "https://api.gitcode.com/api/v5"]
     [else (error 'api-base "Unknown platform: ~a" plat)]))
 
+;; Flatten a jsexpr hash into an alist of (key . string-value) for form encoding.
+;; Handles nested lists (e.g. labels) by repeating the key with [] suffix.
+(define (jsexpr->form-alist h)
+  (apply append
+    (for/list ([(k v) (in-hash h)])
+      (define key-sym (if (symbol? k) k (string->symbol (~a k))))
+      (cond
+        [(list? v)
+         (for/list ([item (in-list v)])
+           (cons (string->symbol (format "~a[]" key-sym)) (~a item)))]
+        [else
+         (list (cons key-sym (~a v)))]))))
+
 (define (api-call method path body-jsexpr token plat)
   (define api-base (api-base-for-platform plat))
   (define u (string->url (string-append api-base path)))
   (define host (url-host u))
   (define raw-path (url->string (struct-copy url u [scheme #f] [host #f] [port #f])))
-  ;; Both platforms: token via Authorization header
   (define request-path raw-path)
+  ;; GitCode v5 API expects form-encoded POST/PATCH bodies
+  (define use-form? (and (eq? plat 'gitcode) body-jsexpr))
+  (define content-type
+    (if use-form?
+        "Content-Type: application/x-www-form-urlencoded"
+        "Content-Type: application/json"))
   (define headers
     (case plat
       [(gitcode)
        (list (format "Authorization: Bearer ~a" token)
              "Accept: application/json"
-             "Content-Type: application/json"
+             content-type
              "User-Agent: pr-review-rkt")]
       [else
        (list (format "Authorization: token ~a" token)
@@ -117,9 +136,10 @@
              "Content-Type: application/json"
              "User-Agent: pr-review-rkt")]))
   (define body-bytes
-    (if body-jsexpr
-        (jsexpr->string body-jsexpr)
-        #f))
+    (cond
+      [(not body-jsexpr) #f]
+      [use-form? (alist->form-urlencoded (jsexpr->form-alist body-jsexpr))]
+      [else (jsexpr->string body-jsexpr)]))
   (define-values (status resp-headers resp-port)
     (http-sendrecv host request-path
                    #:ssl? #t
