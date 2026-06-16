@@ -27,7 +27,54 @@ GET /repos/{owner}/{repo}/pulls/{pull_number}/files
 - `additions` / `deletions` — 行数统计
 - `patch` — unified diff（可能被截断）
 
-支持分页：`?per_page=100&page=N`，或用 `gh api --paginate`。
+支持分页：`?per_page=100&page=N`。
+
+### 创建 PR
+```
+POST /repos/{owner}/{repo}/pulls
+```
+Body:
+```json
+{
+  "title": "Add foo support",
+  "body": "Description...",
+  "head": "alice:feature-foo",
+  "base": "main",
+  "draft": false,
+  "maintainer_can_modify": true
+}
+```
+
+**注意**：
+- `head` 跨 fork 时使用 `<source-owner>:<branch>` 格式；同仓库 PR 直接填分支名
+- `{owner}/{repo}` 是 **目标仓库**（PR 合并到的仓库）
+- 返回 201 Created，响应含 `html_url`、`number`
+
+### 更新/关闭 PR
+```
+PATCH /repos/{owner}/{repo}/pulls/{pull_number}
+```
+Body（任选字段）：
+```json
+{
+  "title": "...",
+  "body": "...",
+  "state": "closed",
+  "base": "develop"
+}
+```
+
+**注意**：
+- `state` 只支持 `"open"` / `"closed"`
+- 取消 draft 状态（`ready_for_review`）需用 GraphQL `markPullRequestReadyForReview`，REST API 不支持
+- 转为 draft 同样需 GraphQL `convertPullRequestToDraft`
+
+### 比较两个 ref（compare）
+```
+GET /repos/{owner}/{repo}/compare/{base}...{head}
+```
+返回 JSON 含 `commits`、`files`、`status`、`ahead_by`、`behind_by`。`head` 跨 fork 时格式同上。
+用于 `--mode pr-create` 预览将要创建的 PR 内容。
 
 ### 提交 Review
 ```
@@ -131,49 +178,13 @@ GET /repos/{owner}/{repo}/commits/{sha}/comments
 ```
 返回字段：`id`, `user.login`, `body`, `path`, `position`, `created_at`
 
-### 认证（send-comment.rkt 查找优先级）
+### 认证（脚本内部查找优先级）
 1. 环境变量 `GITHUB_TOKEN`
 2. 项目目录 `./.github.token`
 3. 用户主目录 `~/.github.token`
-4. `gh auth token` 输出
+4. 可选 fallback：`gh auth token` 输出（不可用属正常情况，不作为 agent 前置条件）
 - Header: `Authorization: token {token}`
-- **Agent 禁止读取 token 文件**——Agent 仅通过 `gh api` 或 WebFetch 获取公开数据
-
-### gh CLI 快捷方式
-```bash
-# PR 元数据
-gh api repos/{owner}/{repo}/pulls/{n}
-
-# PR diff
-gh api repos/{owner}/{repo}/pulls/{n} -H "Accept: application/vnd.github.v3.diff"
-
-# PR 文件列表（分页）
-gh api repos/{owner}/{repo}/pulls/{n}/files --paginate
-
-# 提交 PR review
-gh api repos/{owner}/{repo}/pulls/{n}/reviews -X POST -f body="..." -f event="COMMENT"
-
-# Commit 元数据 + files
-gh api repos/{owner}/{repo}/commits/{sha}
-
-# Commit diff
-gh api repos/{owner}/{repo}/commits/{sha} -H "Accept: application/vnd.github.v3.diff"
-
-# 提交 commit comment
-gh api repos/{owner}/{repo}/commits/{sha}/comments -X POST -f body="..." -f path="file.rs" -F position=12
-
-# PR review comments（inline）
-gh api repos/{owner}/{repo}/pulls/{n}/comments --paginate
-
-# PR issue comments（会话）
-gh api repos/{owner}/{repo}/issues/{n}/comments --paginate
-
-# Commit comments
-gh api repos/{owner}/{repo}/commits/{sha}/comments
-
-# 回复 PR review comment
-gh api repos/{owner}/{repo}/pulls/{n}/comments -X POST -f body="..." -F in_reply_to=12345
-```
+- **Agent 禁止读取 token 文件**。Agent 默认通过 `fetch-diff.rkt` 或 `WebFetch` 获取数据，不检查 `gh` 状态。
 
 ## GitCode
 
@@ -195,6 +206,25 @@ GET /repos/{owner}/{repo}/pulls/{pull_number}
 ```
 GET /repos/{owner}/{repo}/pulls/{pull_number}/files
 ```
+
+### 创建 PR
+```
+POST /repos/{owner}/{repo}/pulls
+```
+Parameters（formData）：
+- `title`*（string）— 必填
+- `head`*（string）— 必填，源分支（GitCode 跨仓库需用 `owner:branch`，同仓库直接分支名）
+- `base`*（string）— 必填，目标基准分支
+- `body`（string）— 可选
+- `draft`（boolean）— 可选
+
+返回 201 Created。
+
+### 更新/关闭 PR
+```
+PATCH /repos/{owner}/{repo}/pulls/{pull_number}
+```
+Parameters（formData）：`title` / `body` / `state`（`open` | `closed`） / `base`，按需提供。
 
 ### 获取 PR 评论
 ```

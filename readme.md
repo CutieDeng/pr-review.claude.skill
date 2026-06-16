@@ -1,6 +1,6 @@
 # pr-review
 
-Claude Code skill for automated PR review. Generates structured `comment.rktd` and an interactive `send-comment.rkt` script.
+Claude Code skill for PR review. Generates and validates structured action data in `comment.rktd`; `send-comment.rkt` is available for explicit interactive sending.
 
 ## Install
 
@@ -20,13 +20,14 @@ This will:
 1. Fetch PR/commit diff via `fetch-diff.rkt` (GitHub & GitCode API)
 2. Analyze changes against configured rules
 3. Generate `comment.rktd` (structured review data)
-4. Provide `send-comment.rkt` for submitting comments
+4. Validate the action data without submitting comments or creating/updating remote resources
 
-### Send comments
+### Validate or Send
 
 ```bash
-racket ~/.claude/skills/pr-review/scripts/send-comment.rkt --file comment.rktd           # interactive
-racket ~/.claude/skills/pr-review/scripts/send-comment.rkt --file comment.rktd --dry-run  # preview only
+racket ~/.claude/skills/pr-review/scripts/send-comment.rkt --dry-run --non-interactive --file comment.rktd  # validate/preview
+racket ~/.claude/skills/pr-review/scripts/send-comment.rkt --file comment.rktd                              # interactive send
+racket ~/.claude/skills/pr-review/scripts/send-comment.rkt --non-interactive --file comment.rktd            # direct send, only when explicitly allowed
 ```
 
 ## Auth
@@ -36,7 +37,7 @@ racket ~/.claude/skills/pr-review/scripts/send-comment.rkt --file comment.rktd -
 1. Env var (`GITHUB_TOKEN` / `GITCODE_TOKEN`)
 2. Project-local `.github.token` / `.gitcode.token`
 3. `~/.github.token` / `~/.gitcode.token`
-4. `gh auth token` (GitHub only)
+4. Optional `gh auth token` fallback (GitHub only; `gh` unavailable is normal)
 
 ## Structure
 

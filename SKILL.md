@@ -1,18 +1,22 @@
 ---
 name: pr-review
-description: "GitHub/GitCode PR/Commit 自动 review 技能。解析 PR 或 Commit URL，获取 diff，生成结构化 comment.rktd 和可执行 send-comment.rkt 脚本。支持交互式逐条确认后发送评论。支持创建 GitHub Issue。"
+description: "GitHub/GitCode PR/Commit review 技能。解析 PR 或 Commit URL，获取 diff，生成并验证结构化 action data（comment.rktd）。用户明确要求时，可通过 send-comment.rkt 交互式发送评论、创建/更新 Issue 或 PR。"
 user-invocable: true
-argument: "<URL> [--mode report|inline|reply|issue] [--interactive]"
+argument: "<URL> [--mode report|inline|reply|issue|pr-create] [--interactive]"
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch, Agent
 ---
 
 # PR / Commit Review
 
-对 GitHub/GitCode Pull Request 或 Commit 执行自动化代码审查，生成结构化评论文件和发送脚本。
+对 GitHub/GitCode Pull Request 或 Commit 执行代码审查，生成并验证结构化 action data 和可选发送脚本。
 
 ## 核心原则
 
-**Agent 默认只生成 `comment.rktd`，绝不主动执行 `send-comment.rkt` 发送。** 用户必须明确要求发送（如"发送"、"提交"、"执行"、"关掉这个 issue"等含有执行意图的指令）时，agent 才可调用 `send-comment.rkt`。若用户意图不明确，agent 应生成文件后告知用户可用的发送命令，由用户自行决定是否执行。
+**Agent 默认只生成并验证 `comment.rktd`，不得执行任何会写入远端的 action。** 用户没有明确要求自动执行 action 时，只做 action data 生成和验证，不发送评论、不创建/更新/关闭 Issue、不创建/更新/关闭 PR。
+
+`send-comment.rkt` 自身默认是交互式发送工具：用户明确要求发送时，agent 可按默认交互式方式调用它；只有用户明确要求自动执行，或使用方配置明确选择 direct send 时，才可使用非交互式直接发送；配置选择 dry-run 时只能预览/验证，不得实际发送。
+
+`gh` CLI 不可用是正常情况。Agent 不应默认检查或建议检查 `gh` 状态；除非用户明确要求调试 GitHub CLI，否则不要运行 `gh auth status`、`gh auth token` 等状态/认证查询。
 
 ## 触发条件
 
@@ -32,7 +36,7 @@ URL 可以是 PR 或 Commit 链接。
 - decision body 是完整报告，包含：总评、按类别分组的发现（安全/正确性/性能/风格）、具体规则引用、修复建议
 - 不生成或仅生成极少量 inline-comment（仅 critical 级别）
 - PR 模式：event 根据报告结论设置（`APPROVE` / `REQUEST_CHANGES` / `COMMENT`）
-- Commit 模式：decision body 作为单条总结评论发送
+- Commit 模式：decision body 作为待发送的单条总结评论 action data
 
 ### `--mode inline`（行评论模式，默认）
 
@@ -61,6 +65,24 @@ URL 可以是 PR 或 Commit 链接。
 3. `discuss`：与用户讨论该评论的上下文和最佳回复策略后再生成回复
 4. 所有评论处理完毕后生成 comment.rktd
 
+### `--mode pr-create`（PR 创建/更新模式）
+
+创建新 PR，或更新/关闭已有 PR（包括改 title/body、close/reopen、ready_for_review）。
+
+输出特征：
+- 不生成 decision 和 inline-comment
+- 最多生成 **1 条** `(section . pr-create)` 记录（schema 限制）
+- 可同时附加 0-N 条 `(section . pr-update)` 记录修改/关闭已有 PR
+- `--interactive` 模式下确认每个字段后生成 action data；是否发送仍由 action 执行策略决定
+
+URL 格式：
+- **创建新 PR（compare URL，推荐）**：`https://github.com/<owner>/<repo>/compare/<base>...<head>`
+  - 同仓库：`compare/main...feature-foo`
+  - 跨 fork：`compare/main...alice:feature-foo`（`<source-owner>:<branch>`）
+  - agent 从 URL 直接解析 target-owner/target-repo/base/head，无需追问
+- **创建新 PR（仅目标仓库）**：`https://github.com/<owner>/<repo>` —— 由 agent 通过 `--interactive` 询问 head/base
+- **更新已有 PR**：`https://github.com/<owner>/<repo>/pull/<number>` —— 仅生成 `pr-update`，不生成 `pr-create`
+
 ### `--mode issue`（Issue 创建模式）
 
 在仓库中创建 GitHub/GitCode Issue。可独立使用，也可在 review 过程中混合使用。
@@ -69,7 +91,7 @@ URL 可以是 PR 或 Commit 链接。
 - 不生成 decision 和 inline-comment
 - 生成 issue 记录，每条对应一个待创建的 Issue
 - 支持设置 title、body、labels、assignees、milestone
-- `--interactive` 模式下逐条确认 issue 内容后再发送
+- `--interactive` 模式下逐条确认 issue 内容后生成 action data；是否创建仍由 action 执行策略决定
 
 独立使用：
 ```bash
@@ -88,17 +110,17 @@ URL 格式：
 
 从参数中提取 URL、模式和可选 flags：
 
-1. 提取 `--mode`：`report` | `inline`（默认）| `reply` | `issue`
+1. 提取 `--mode`：`report` | `inline`（默认）| `reply` | `issue` | `pr-create`
 2. 提取 `--interactive`：reply 模式默认开启，其他模式手动开启
 3. 解析 URL hostname 识别平台：
    - `github.com` → platform `github`
    - `gitcode.com` / `atomgit.com` → platform `gitcode`
    - 其他 → 尝试作为 GitHub Enterprise 处理
 4. 从 URL path 识别类型并提取字段：
-   - **PR**：`/<owner>/<repo>/pull/<number>` → `review-type: pr`
-   - **PR (GitCode)**：`/<owner>/<repo>/pull/<number>` → `review-type: pr`
+   - **PR**：`/<owner>/<repo>/pull/<number>` → `review-type: pr`（`pr-create` 模式下仅生成 pr-update）
    - **Commit**：`/<owner>/<repo>/commit/<sha>` → `review-type: commit`
-   - **Repo**（issue 模式）：`/<owner>/<repo>` → `review-type: issue`
+   - **Compare**（pr-create 模式）：`/<owner>/<repo>/compare/<base>...<head>` → `review-type: pr-create`，提取 base、head（含 `owner:branch` 跨 fork 形式）
+   - **Repo**（issue/pr-create 模式）：`/<owner>/<repo>` → `review-type: issue` 或 `pr-create`（互动收集 head/base）
 5. 若解析失败，报错并终止
 
 ## 路径约定
@@ -141,13 +163,18 @@ racket $SKILL_DIR/scripts/fetch-diff.rkt --url <URL> --output json
 1. 检查项目根目录是否存在 `.skill.pr-review.history/` 目录
 2. 若不存在，创建 `.skill.pr-review.history/` 并从本 skill 的 `examples/config-example.rktd` 复制为 `.skill.pr-review.history/config.rktd`，同时创建 `.skill.pr-review.history/history/`
 3. 加载：
-   - `.skill.pr-review.history/config.rktd` — review 规则和平台配置
+   - `.skill.pr-review.history/config.rktd` — review 规则、平台配置和 action 执行策略
    - `.skill.pr-review.history/preferences.rktd` — 用户偏好（severity 接受率、风格偏好），可能不存在
    - `.skill.pr-review.history/history/` — 最近 3 条同仓库历史 review，用于保持一致性
 
 注意：`.skill.pr-review.history/` 是 per-project 运行时目录，不属于本 skill 仓库。
 
 参考 `references/rktd-schemas.md` 了解完整 schema。
+
+Action 执行策略从 `settings.action-mode` 读取，默认 `interactive`：
+- `interactive`：仅在用户明确要求发送时调用 `send-comment.rkt`，并保留逐条确认
+- `direct-send`：仅当配置明确选择且当前用户请求允许执行 action 时，才可使用 `--non-interactive`
+- `dry-run`：只运行 dry-run 验证/预览，不得执行实际发送
 
 ## 分析流程
 
@@ -211,6 +238,12 @@ fetch-diff 返回的 JSON 中包含已有评论数据：
 在项目根目录生成 `comment.rktd`。每条记录使用**多行缩进格式**，记录间空行分隔，关键闭括号加注释辅助匹配。
 
 `read-all` 天然支持多行 S-expression，无需单行压缩。
+
+生成后必须验证 action data：
+- 确认 `.rktd` 可被 Racket `read` 读取，且恰好 1 条 `(section . meta)`
+- 校验 action 记录数量限制，例如 `(section . pr-create)` 最多 1 条
+- 默认使用 dry-run 验证 payload，不执行写操作：`racket $SKILL_DIR/scripts/send-comment.rkt --dry-run --non-interactive --file comment.rktd`
+- dry-run 只用于验证/预览；没有明确执行意图时，不得继续运行实际发送命令
 
 ### PR review 格式
 
@@ -348,6 +381,51 @@ fetch-diff 返回的 JSON 中包含已有评论数据：
 
 API：`PATCH /repos/{owner}/{repo}/issues/{issue_number}`
 
+### pr-create 记录（创建新 PR，最多 1 条）
+
+```racket
+;; ── pr-create #1 ──
+((section . pr-create)
+ (id . 1)
+ (title . "Add foo support")
+ (body . "## Summary\n\n详细说明...")
+ (head . "alice:feature-foo")     ; 同仓库填 "feature-foo"；跨 fork 填 "owner:branch"
+ (base . "main")
+ (draft . #f)                     ; 是否为 draft PR
+ (maintainer-can-modify . #t)     ; 跨 fork 时允许 maintainer 修改源分支
+) ;; end pr-create #1
+```
+
+- `title`、`head`、`base` 必填
+- `body` 支持 Markdown
+- `head`：跨 fork 时必须使用 `<source-owner>:<branch>` 格式
+- 目标仓库（API 路径中的 owner/repo）从 meta 的 `target-owner`、`target-repo` 取
+- 每个 `comment.rktd` 最多 1 条 pr-create 记录
+
+API：`POST /repos/{target-owner}/{target-repo}/pulls`
+
+### pr-update 记录（更新/关闭已有 PR）
+
+```racket
+;; ── pr-update #1 ──
+((section . pr-update)
+ (id . 1)
+ (pr-number . 42)
+ (state . closed)
+ (title . #f)
+ (body . #f)
+ (base . #f)
+ (draft . #f)                     ; #f=不修改；#t=转 draft；'ready=ready_for_review
+) ;; end pr-update #1
+```
+
+- `pr-number`：目标 PR 编号（必填）
+- `state`：`open` | `closed`（可选，仅修改状态时填）
+- `title`/`body`/`base`：新值（可选，不提供则不修改）
+- `draft`：`#f`=不修改；`#t`=转 draft；`'ready`=取消 draft（GitHub `ready_for_review` GraphQL）
+
+API：`PATCH /repos/{target-owner}/{target-repo}/pulls/{pr-number}`
+
 ### 格式规范
 
 - 每个 key-value pair 独占一行，1 空格缩进
@@ -358,14 +436,15 @@ API：`PATCH /repos/{owner}/{repo}/issues/{issue_number}`
 
 ### 字段说明
 
-**meta 通用字段**：`review-type`（`pr` | `commit` | `issue`）、`mode`（`report` | `inline` | `reply` | `issue`）、`platform`、`owner`、`repo`、`reviewed-at`/`created-at`
+**meta 通用字段**：`review-type`（`pr` | `commit` | `issue` | `pr-create`）、`mode`（`report` | `inline` | `reply` | `issue` | `pr-create`）、`platform`、`owner`、`repo`、`reviewed-at`/`created-at`
 **meta PR 专有**：`pr-url`、`pr-number`、`pr-title`、`pr-author`
 **meta commit 专有**：`commit-url`、`commit-sha`、`commit-message`、`commit-author`
 **meta issue 专有**：无额外字段（仅需通用字段中的 `owner`、`repo`、`platform`）
+**meta pr-create 专有**：`compare-url`（compare URL 时提供）、`target-owner`、`target-repo`（PR 提交到的仓库；API 路径来源）。注意：通用 `owner`/`repo` 与 `target-owner`/`target-repo` 同义，pr-create 推荐用后者明确语义
 
 **decision**：
 - PR：必须提供，`event` 为 `"APPROVE"` | `"REQUEST_CHANGES"` | `"COMMENT"`
-- Commit：可选，仅含 `body`（无 `event`），作为总结评论发送
+- Commit：可选，仅含 `body`（无 `event`），作为待发送的总结评论
 
 **inline-comment**：
 - `line`：文件行号（新文件中的行号）+ `side`（`"RIGHT"` / `"LEFT"`）。GitHub `/reviews` API 使用此字段
@@ -376,14 +455,23 @@ API：`PATCH /repos/{owner}/{repo}/issues/{issue_number}`
 
 **position 计算方法**：从 `fetch-diff.rkt --output json` 返回的 files 数组中取每个文件的 diff 字段，`@@` 行之后的每一行（包括 context、`+`、`-` 行）从 1 开始计数。多个 hunk 时 position 在各 hunk 间连续累加。
 
-## 发送（仅在用户明确要求时）
+## 发送（仅在用户明确要求或配置允许时）
 
-生成 `comment.rktd` 后，**告知用户**可通过以下命令发送，但 **agent 不主动执行**，除非用户明确表达了发送意图：
+生成并验证 `comment.rktd` 后，若用户没有明确要求自动执行 action，agent 只报告验证结果和文件路径，不主动执行发送/创建/更新/关闭操作。
+
+用户明确要求发送时，默认使用交互式发送：
 ```bash
-racket $SKILL_DIR/scripts/send-comment.rkt                    # 交互式发送
-racket $SKILL_DIR/scripts/send-comment.rkt --dry-run          # 仅预览 API 调用
-racket $SKILL_DIR/scripts/send-comment.rkt --non-interactive  # 直接全部发送
-racket $SKILL_DIR/scripts/send-comment.rkt --skip-nitpicks    # 跳过 nitpick 级别
+racket $SKILL_DIR/scripts/send-comment.rkt --file comment.rktd
+```
+
+验证或配置为 dry-run 时，只能预览 payload：
+```bash
+racket $SKILL_DIR/scripts/send-comment.rkt --dry-run --non-interactive --file comment.rktd
+```
+
+只有用户明确要求自动执行，或 `settings.action-mode` 明确为 `direct-send` 且当前请求允许执行 action 时，才可直接全部发送：
+```bash
+racket $SKILL_DIR/scripts/send-comment.rkt --non-interactive --file comment.rktd
 ```
 
 ## 存档
@@ -433,20 +521,31 @@ racket $SKILL_DIR/scripts/send-comment.rkt --skip-nitpicks    # 跳过 nitpick �
 
 ### issue 模式
 ```
-## Issue 创建完成
+## Issue Action Data 完成
 
 **目标**: owner/repo
-**Issue 统计**: N 条 issue 已创建
+**Issue 统计**: N 条待创建 issue（已验证 action data）
 
 ### 文件
 - `comment.rktd` — issue 数据（可编辑后再发送）
 ```
 
+### pr-create 模式
+```
+## PR Action Data 完成
+
+**目标**: target-owner/target-repo
+**操作**: 1 条 pr-create（head→base）+ N 条 pr-update
+
+### 文件
+- `comment.rktd` — pr-create/pr-update 数据（可编辑后再发送）
+```
+
 通用使用方式：
 ```bash
-racket $SKILL_DIR/scripts/send-comment.rkt                    # 交互式发送
-racket $SKILL_DIR/scripts/send-comment.rkt --dry-run          # 仅预览 API 调用
-racket $SKILL_DIR/scripts/send-comment.rkt --non-interactive  # 直接全部发送
+racket $SKILL_DIR/scripts/send-comment.rkt --dry-run --non-interactive --file comment.rktd  # 验证/预览
+racket $SKILL_DIR/scripts/send-comment.rkt --file comment.rktd                              # 交互式发送
+racket $SKILL_DIR/scripts/send-comment.rkt --non-interactive --file comment.rktd            # 直接全部发送（需明确允许）
 ```
 
 ## 交互模式（--interactive）
@@ -479,7 +578,7 @@ racket $SKILL_DIR/scripts/send-comment.rkt --non-interactive  # 直接全部发�
 
 ## 偏好学习
 
-每次 review 完成后（send-comment.rkt 执行后），更新 `.skill.pr-review.history/preferences.rktd`：
+每次实际发送完成后（不包括 dry-run 验证），可更新 `.skill.pr-review.history/preferences.rktd`：
 
 - 统计用户在交互模式中 accept/skip 的比率，按 severity 更新 `severity-stats`
 - 记录用户手动编辑评论的模式，更新 `style-preference`
@@ -487,17 +586,19 @@ racket $SKILL_DIR/scripts/send-comment.rkt --non-interactive  # 直接全部发�
 
 ## 认证
 
-**禁止事项**：Agent 绝对不得读取 `.github.token`、`.gitcode.token` 或任何 token 文件。认证仅由 `send-comment.rkt` 脚本在用户主动执行时处理。
+**禁止事项**：Agent 绝对不得读取 `.github.token`、`.gitcode.token` 或任何 token 文件。认证仅由脚本内部处理，agent 不应直接接触 token。
 
 Agent 获取 PR 数据时仅使用以下方式：
-- `gh api ...`（依赖 gh CLI 自身的认证状态）
+- `$SKILL_DIR/scripts/fetch-diff.rkt`
 - `WebFetch`（公开可访问的 PR）
+
+不要把 `gh` CLI 作为默认依赖，不要为了本 skill 主动查询 `gh` 状态。`gh` 相关 fallback 仅是脚本内部可选能力，不是 agent 工作流前置条件。
 
 `send-comment.rkt` 脚本的认证查找优先级：
 1. 环境变量：`GITHUB_TOKEN` / `GITCODE_TOKEN`
 2. 项目目录下 `.github.token`（GitCode 同理 `.gitcode.token`）
 3. `~/.github.token`（GitCode 同理 `~/.gitcode.token`）
-4. Fallback：`gh auth token`（仅 GitHub）
+4. 可选 fallback：`gh auth token`（仅 GitHub；不可用属正常情况）
 
 Token 文件应为纯文本，内容仅含 token 字符串。建议加入 `.gitignore`。
 
@@ -508,7 +609,7 @@ Token 文件应为纯文本，内容仅含 token 字符串。建议加入 `.giti
 ## 错误处理
 
 - URL 格式无效 → 报错并给出正确格式示例
-- `gh` 不可用且无 token → 提示安装 gh 或设置 GITHUB_TOKEN
+- 无 token → 公开仓库可继续匿名读取；私有仓库或受限 API 返回权限错误时，提示用户配置对应 token
 - PR 不存在或无权限 → 显示 API 错误信息
 - diff 过大（>100 files）→ 警告并只处理前 50 个文件
 

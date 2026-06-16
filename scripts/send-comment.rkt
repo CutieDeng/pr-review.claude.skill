@@ -260,14 +260,23 @@
   (filter (lambda (r) (section=? 'issue r)) records))
 (define all-issue-updates
   (filter (lambda (r) (section=? 'issue-update r)) records))
+(define all-pr-creates
+  (filter (lambda (r) (section=? 'pr-create r)) records))
+(define all-pr-updates
+  (filter (lambda (r) (section=? 'pr-update r)) records))
+
+(when (> (length all-pr-creates) 1)
+  (error 'send-comment "comment.rktd may contain at most 1 (section . pr-create) record (found ~a)"
+         (length all-pr-creates)))
 
 (unless meta
   (error 'send-comment "No (section . meta) record found in ~a" (comment-file)))
 
 (define platform (get 'platform meta))
-(define review-type (get* 'review-type meta 'pr))  ; 'pr or 'commit
-(define owner (get 'owner meta))
-(define repo (get 'repo meta))
+(define review-type (get* 'review-type meta 'pr))  ; 'pr | 'commit | 'issue | 'pr-create
+;; pr-create meta uses target-owner/target-repo; fall back to owner/repo
+(define owner (or (get* 'target-owner meta #f) (get 'owner meta)))
+(define repo  (or (get* 'target-repo  meta #f) (get 'repo  meta)))
 (define pr-number (get* 'pr-number meta #f))
 (define commit-sha (get* 'commit-sha meta #f))
 
@@ -282,18 +291,20 @@
 
 (define target-label
   (case review-type
-    [(pr)     (format "~a/~a#~a" owner repo pr-number)]
-    [(commit) (format "~a/~a@~a" owner repo (substring (~a commit-sha) 0 (min 7 (string-length (~a commit-sha)))))]
-    [(issue)  (format "~a/~a (new issues)" owner repo)]
-    [else     (format "~a/~a" owner repo)]))
+    [(pr)        (format "~a/~a#~a" owner repo pr-number)]
+    [(commit)    (format "~a/~a@~a" owner repo (substring (~a commit-sha) 0 (min 7 (string-length (~a commit-sha)))))]
+    [(issue)     (format "~a/~a (new issues)" owner repo)]
+    [(pr-create) (format "~a/~a (PR create/update)" owner repo)]
+    [else        (format "~a/~a" owner repo)]))
 
 (printf "\n~a Review: ~a\n" (color 1 (string-upcase (~a review-type))) target-label)
 (when decision
   (define evt (get* 'event decision #f))
   (when evt (printf "Decision: ~a\n" evt)))
-(printf "Comments: ~a total (~a after filter), ~a replies, ~a issues, ~a issue-updates\n\n"
+(printf "Comments: ~a total (~a after filter), ~a replies, ~a issues, ~a issue-updates, ~a pr-creates, ~a pr-updates\n\n"
         (length all-comments) (length comments) (length all-replies)
-        (length all-issues) (length all-issue-updates))
+        (length all-issues) (length all-issue-updates)
+        (length all-pr-creates) (length all-pr-updates))
 
 ;; interactive: confirm decision first
 (define send-decision?
@@ -458,12 +469,95 @@
                         (displayln "\nAborted. Nothing sent.")
                         (exit 0))]))))]))
 
-(printf "\n~a: ~a comments + ~a replies + ~a issues + ~a updates to send~a\n"
+;; interactive: filter pr-creates (max 1)
+(define (display-pr-create pc)
+  (printf "\n~a ~a\n" (color 32 "PR-CREATE") (get 'title pc))
+  (printf "  ~a → ~a:~a\n"
+          (color 36 (get 'head pc))
+          (color 36 (format "~a/~a" owner repo))
+          (color 36 (get 'base pc)))
+  (define draft (get* 'draft pc #f))
+  (when draft (printf "  Draft: ~a\n" draft))
+  (define mcm (get* 'maintainer-can-modify pc #t))
+  (printf "  maintainer_can_modify: ~a\n" mcm)
+  (printf "  Body:\n  ~a\n" (get* 'body pc "")))
+
+(define (prompt-edit-pr-create pc)
+  (printf "  Current title: ~a\n" (get 'title pc))
+  (display "  New title (enter to keep): ")
+  (flush-output)
+  (define t-line (read-line))
+  (define pc1
+    (if (or (eof-object? t-line) (string=? (string-trim t-line) ""))
+        pc
+        (map (lambda (p) (if (eq? (car p) 'title) (cons 'title (string-trim t-line)) p)) pc)))
+  (printf "  Current body:\n  ~a\n" (get* 'body pc1 ""))
+  (display "  New body (enter to keep): ")
+  (flush-output)
+  (define b-line (read-line))
+  (if (or (eof-object? b-line) (string=? (string-trim b-line) ""))
+      pc1
+      (let ([has-body? (memf (lambda (p) (eq? (car p) 'body)) pc1)])
+        (if has-body?
+            (map (lambda (p) (if (eq? (car p) 'body) (cons 'body (string-trim b-line)) p)) pc1)
+            (append pc1 (list (cons 'body (string-trim b-line))))))))
+
+(define final-pr-creates
+  (cond
+    [(null? all-pr-creates) '()]
+    [(non-interactive?) all-pr-creates]
+    [else
+     (let loop ([ps all-pr-creates] [acc '()])
+       (if (null? ps)
+           (reverse acc)
+           (let ([pc (car ps)])
+             (display-pr-create pc)
+             (define action (prompt-action))
+             (match action
+               ['send (loop (cdr ps) (cons pc acc))]
+               ['skip (loop (cdr ps) acc)]
+               ['edit (let ([edited (prompt-edit-pr-create pc)])
+                        (loop (cdr ps) (cons edited acc)))]
+               ['quit (begin (displayln "\nAborted. Nothing sent.") (exit 0))]))))]))
+
+;; interactive: filter pr-updates
+(define (display-pr-update upd)
+  (define n (get 'pr-number upd))
+  (define st (get* 'state upd #f))
+  (printf "\n~a Update PR #~a" (color 33 "PR-UPDATE") n)
+  (when st (printf " → state=~a" st))
+  (newline)
+  (when (get* 'title upd #f) (printf "  New title: ~a\n" (get* 'title upd)))
+  (when (get* 'body upd #f)  (printf "  New body: ~a\n" (get* 'body upd)))
+  (when (get* 'base upd #f)  (printf "  New base: ~a\n" (get* 'base upd)))
+  (define dr (get* 'draft upd #f))
+  (when dr (printf "  Draft toggle: ~a\n" dr)))
+
+(define final-pr-updates
+  (cond
+    [(null? all-pr-updates) '()]
+    [(non-interactive?) all-pr-updates]
+    [else
+     (let loop ([us all-pr-updates] [acc '()])
+       (if (null? us)
+           (reverse acc)
+           (let ([u (car us)])
+             (display-pr-update u)
+             (define action (prompt-action))
+             (match action
+               ['send (loop (cdr us) (cons u acc))]
+               ['skip (loop (cdr us) acc)]
+               ['edit (loop (cdr us) (cons u acc))]
+               ['quit (begin (displayln "\nAborted. Nothing sent.") (exit 0))]))))]))
+
+(printf "\n~a: ~a comments + ~a replies + ~a issues + ~a updates + ~a pr-creates + ~a pr-updates to send~a\n"
         (color 1 "Final")
         (length final-comments)
         (length final-replies)
         (length final-issues)
         (length final-issue-updates)
+        (length final-pr-creates)
+        (length final-pr-updates)
         (if send-decision? " + summary" ""))
 
 ;; ── send: PR review (batch) ──────────────────────────────────────────
@@ -739,6 +833,107 @@
                        (hash-ref resp 'state "ok")))
              (printf "  ~a: ~a\n~a\n" (color 31 "Error") st rb)))])))
 
+;; ── send: pr-creates ────────────────────────────────────────────────
+
+(define (build-pr-create-payload pc)
+  (define h (make-hasheq))
+  (hash-set! h 'title (get 'title pc))
+  (hash-set! h 'head  (get 'head pc))
+  (hash-set! h 'base  (get 'base pc))
+  (define body (get* 'body pc #f))
+  (when body (hash-set! h 'body body))
+  (define draft (get* 'draft pc #f))
+  (when draft (hash-set! h 'draft #t))
+  (define mcm (get* 'maintainer-can-modify pc #t))
+  ;; maintainer_can_modify only meaningful for cross-fork; harmless for same-repo
+  (when (eq? platform 'github)
+    (hash-set! h 'maintainer_can_modify (if mcm #t #f)))
+  h)
+
+(define (send-pr-creates! pcs)
+  (unless (null? pcs)
+    (define api-path (format "/repos/~a/~a/pulls" owner repo))
+    (cond
+      [(dry-run?)
+       (displayln "\n--- DRY RUN (pr-create) ---")
+       (for ([pc (in-list pcs)])
+         (printf "POST ~a\n" api-path)
+         (displayln (jsexpr->string (build-pr-create-payload pc))))
+       (displayln "--- END DRY RUN (pr-create) ---")]
+      [else
+       (define token (force current-token))
+       (for ([pc (in-list pcs)])
+         (printf "Creating PR \"~a\" (~a → ~a) ...\n"
+                 (get 'title pc) (get 'head pc) (get 'base pc))
+         (define-values (st rb)
+           (api-call "POST" api-path (build-pr-create-payload pc) token platform))
+         (cond
+           [(regexp-match? #rx"^HTTP/[0-9.]+ 201" st)
+            (let ([resp (with-handlers ([exn:fail? (lambda (_) (hasheq))])
+                          (string->jsexpr rb))])
+              (printf "  ~a #~a ~a\n"
+                      (color 32 "Created:")
+                      (hash-ref resp 'number "?")
+                      (hash-ref resp 'html_url (hash-ref resp 'url ""))))]
+           [else
+            (printf "  ~a: ~a\n~a\n" (color 31 "Error") st rb)]))])))
+
+;; ── send: pr-updates ────────────────────────────────────────────────
+
+(define (build-pr-update-payload upd)
+  (define h (make-hasheq))
+  (define st (get* 'state upd #f))
+  (when st (hash-set! h 'state (~a st)))
+  (define title (get* 'title upd #f))
+  (when title (hash-set! h 'title title))
+  (define body (get* 'body upd #f))
+  (when body (hash-set! h 'body body))
+  (define base (get* 'base upd #f))
+  (when base (hash-set! h 'base base))
+  h)
+
+(define (send-pr-updates! updates)
+  (unless (null? updates)
+    (cond
+      [(dry-run?)
+       (displayln "\n--- DRY RUN (pr-update) ---")
+       (for ([upd (in-list updates)])
+         (define n (get 'pr-number upd))
+         (define api-path (format "/repos/~a/~a/pulls/~a" owner repo n))
+         (define payload (build-pr-update-payload upd))
+         (when (> (hash-count payload) 0)
+           (printf "PATCH ~a\n" api-path)
+           (displayln (jsexpr->string payload)))
+         (define dr (get* 'draft upd #f))
+         (when dr
+           (printf "# NOTE: draft toggle (~a) requires GraphQL — not sent by this script.\n" dr)))
+       (displayln "--- END DRY RUN (pr-update) ---")]
+      [else
+       (define token (force current-token))
+       (for ([upd (in-list updates)])
+         (define n (get 'pr-number upd))
+         (define api-path (format "/repos/~a/~a/pulls/~a" owner repo n))
+         (define payload (build-pr-update-payload upd))
+         (cond
+           [(zero? (hash-count payload))
+            (printf "PR #~a: no PATCH-able fields, skipping.\n" n)]
+           [else
+            (printf "Updating PR #~a ...\n" n)
+            (define-values (st rb)
+              (api-call "PATCH" api-path payload token platform))
+            (if (regexp-match? #rx"^HTTP/[0-9.]+ 200" st)
+                (let ([resp (with-handlers ([exn:fail? (lambda (_) (hasheq))])
+                              (string->jsexpr rb))])
+                  (printf "  ~a #~a (~a)\n"
+                          (color 32 "Updated:")
+                          (hash-ref resp 'number n)
+                          (hash-ref resp 'state "ok")))
+                (printf "  ~a: ~a\n~a\n" (color 31 "Error") st rb))])
+         (define dr (get* 'draft upd #f))
+         (when dr
+           (printf "  ~a draft toggle (~a) requires GraphQL — not sent. Use the GitHub UI or `gh pr ready` / `gh pr edit --add-label`.\n"
+                   (color 33 "Skipped:") dr)))])))
+
 ;; ── dispatch ────────────────────────────────────────────────────────
 
 (when (dry-run?)
@@ -748,14 +943,17 @@
 ;; only send review/comments if there are comments or a decision to send
 (when (or (not (null? final-comments)) send-decision?)
   (case review-type
-    [(pr)     (send-pr-review! final-comments)]
-    [(commit) (send-commit-comments! final-comments)]
-    [(issue)  (void)]  ; issue-only mode has no review comments
-    [else     (error 'send-comment "Unknown review-type: ~a" review-type)]))
+    [(pr)        (send-pr-review! final-comments)]
+    [(commit)    (send-commit-comments! final-comments)]
+    [(issue)     (void)]   ; issue-only mode has no review comments
+    [(pr-create) (void)]   ; pr-create mode has no review comments
+    [else        (error 'send-comment "Unknown review-type: ~a" review-type)]))
 
 (send-replies! final-replies)
 (send-issues! final-issues)
 (send-issue-updates! final-issue-updates)
+(send-pr-creates! final-pr-creates)
+(send-pr-updates! final-pr-updates)
 
 (when (dry-run?)
   (when (not (null? final-replies))

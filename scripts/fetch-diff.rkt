@@ -135,6 +135,14 @@
 
 ;; ── URL 解析 ─────────────────────────────────────────────────────────
 
+;; parse-url returns 5 values: platform owner repo type ref
+;; type ∈ {'pr 'commit 'compare 'repo}
+;; ref:
+;;   pr      → PR number string
+;;   commit  → commit SHA
+;;   compare → "<base>...<head>" string (URL-decoded preservation of slashes intentional;
+;;             callers split on "..." to obtain base/head)
+;;   repo    → #f
 (define (parse-url url-str)
   (define u (string->url url-str))
   (define host (url-host u))
@@ -153,7 +161,23 @@
     ;; /<owner>/<repo>/commit/<sha>
     [(list owner repo "commit" sha)
      (values platform owner repo 'commit sha)]
+    ;; /<owner>/<repo>/compare/<base>...<head>  (slashes inside base/head not supported here;
+    ;; GitHub compare URLs put the full triple-dot/double-dot expression in one path segment)
+    [(list owner repo "compare" spec)
+     (values platform owner repo 'compare spec)]
+    ;; /<owner>/<repo>
+    [(list owner repo)
+     (values platform owner repo 'repo #f)]
     [_ (error 'parse-url "Cannot parse URL: ~a" url-str)]))
+
+;; split "<base>...<head>" into (values base head); supports "..." (3-dot) and ".." (2-dot)
+(define (split-compare-spec spec)
+  (cond
+    [(regexp-match #rx"^(.+)\\.\\.\\.(.+)$" spec)
+     => (lambda (m) (values (cadr m) (caddr m)))]
+    [(regexp-match #rx"^(.+)\\.\\.(.+)$" spec)
+     => (lambda (m) (values (cadr m) (caddr m)))]
+    [else (error 'split-compare-spec "Invalid compare spec: ~a (expected base...head)" spec)]))
 
 ;; ── API base per platform ────────────────────────────────────────────
 
@@ -245,6 +269,37 @@
                (string->jsexpr comments-body)))
   result)
 
+(define (fetch-compare-data api-base owner repo spec token)
+  (define-values (base head) (split-compare-spec spec))
+  ;; URL-encode each side; head may contain ":" (cross-fork); GitHub accepts it raw
+  (define compare-path (format "/repos/~a/~a/compare/~a...~a" owner repo base head))
+  (define-values (st1 cmp-body)
+    (api-get api-base compare-path token))
+  (define cmp-json
+    (with-handlers ([exn:fail? (lambda (_) (hasheq))])
+      (string->jsexpr cmp-body)))
+  (define result (make-hasheq))
+  (hash-set! result 'type "compare")
+  (hash-set! result 'base base)
+  (hash-set! result 'head head)
+  (hash-set! result 'compare cmp-json)
+  ;; surface files for `--output files` reuse
+  (when (and (hash? cmp-json) (hash-has-key? cmp-json 'files))
+    (hash-set! result 'files (hash-ref cmp-json 'files '())))
+  result)
+
+(define (fetch-repo-data api-base owner repo token)
+  ;; minimal repo metadata, mainly to verify repo exists and to fetch default branch
+  (define-values (st body)
+    (api-get api-base (format "/repos/~a/~a" owner repo) token))
+  (define meta
+    (with-handlers ([exn:fail? (lambda (_) (hasheq))])
+      (string->jsexpr body)))
+  (define result (make-hasheq))
+  (hash-set! result 'type "repo")
+  (hash-set! result 'meta meta)
+  result)
+
 ;; ── output formatters ────────────────────────────────────────────────
 
 (require racket/list)
@@ -275,7 +330,21 @@
     [(commit)
      (printf "SHA: ~a\n" (jref meta 'sha))
      (printf "Message: ~a\n" (jref meta 'commit 'message))
-     (printf "Author: ~a\n" (jref meta 'commit 'author 'name))])
+     (printf "Author: ~a\n" (jref meta 'commit 'author 'name))]
+    [(compare)
+     (printf "Base: ~a\n" (hash-ref result 'base "?"))
+     (printf "Head: ~a\n" (hash-ref result 'head "?"))
+     (define cmp (hash-ref result 'compare (hasheq)))
+     (when (hash? cmp)
+       (printf "Status: ~a\n" (hash-ref cmp 'status "?"))
+       (printf "Ahead/Behind: ~a/~a\n"
+               (hash-ref cmp 'ahead_by "?")
+               (hash-ref cmp 'behind_by "?"))
+       (define commits (hash-ref cmp 'commits '()))
+       (when (list? commits) (printf "Commits: ~a\n" (length commits))))]
+    [(repo)
+     (printf "Default branch: ~a\n" (or (jref meta 'default_branch) "?"))
+     (printf "Description: ~a\n" (truncate (or (jref meta 'description) "") 200))])
   ;; count comments
   (define rc (hash-ref result 'review-comments '()))
   (define ic (hash-ref result 'issue-comments '()))
@@ -383,8 +452,11 @@
   (opt-ref ref))
 
 ;; validate
-(unless (and (opt-platform) (opt-owner) (opt-repo) (opt-type) (opt-ref))
-  (error 'fetch-diff "Missing required arguments. Use --url or provide --platform --owner --repo --type --ref"))
+(unless (and (opt-platform) (opt-owner) (opt-repo) (opt-type))
+  (error 'fetch-diff "Missing required arguments. Use --url or provide --platform --owner --repo --type [--ref]"))
+;; --ref required except for type=repo
+(when (and (not (string=? (opt-type) "repo")) (not (opt-ref)))
+  (error 'fetch-diff "--ref is required for type=~a" (opt-type)))
 
 (configure-auth! (opt-platform))
 (current-platform (opt-platform))
@@ -393,9 +465,11 @@
 
 (define result
   (case (string->symbol (opt-type))
-    [(pr)     (fetch-pr-data api-base (opt-owner) (opt-repo) (opt-ref) token)]
-    [(commit) (fetch-commit-data api-base (opt-owner) (opt-repo) (opt-ref) token)]
-    [else     (error 'fetch-diff "Unknown type: ~a" (opt-type))]))
+    [(pr)      (fetch-pr-data api-base (opt-owner) (opt-repo) (opt-ref) token)]
+    [(commit)  (fetch-commit-data api-base (opt-owner) (opt-repo) (opt-ref) token)]
+    [(compare) (fetch-compare-data api-base (opt-owner) (opt-repo) (opt-ref) token)]
+    [(repo)    (fetch-repo-data api-base (opt-owner) (opt-repo) token)]
+    [else      (error 'fetch-diff "Unknown type: ~a" (opt-type))]))
 
 (case (string->symbol (opt-output))
   [(json)     (write-json result) (newline)]

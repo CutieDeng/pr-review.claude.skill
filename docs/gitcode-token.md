@@ -67,7 +67,7 @@ chmod 600 ~/.gitcode.token
 
 ```bash
 # 用 send-comment.rkt 的 dry-run 模式验证认证是否生效
-racket ~/.claude/skills/pr-review/scripts/send-comment.rkt --dry-run --file comment.rktd
+racket ~/.claude/skills/pr-review/scripts/send-comment.rkt --dry-run --non-interactive --file comment.rktd
 ```
 
 如果没有报认证错误，说明配置成功。

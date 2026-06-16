@@ -12,7 +12,7 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `section` | symbol `meta` | 记录类型标识 |
-| `review-type` | symbol | `pr` \| `commit` \| `issue` |
+| `review-type` | symbol | `pr` \| `commit` \| `issue` \| `pr-create` |
 | `platform` | symbol | `github` \| `gitcode` |
 | `owner` | string | 仓库所有者 |
 | `repo` | string | 仓库名 |
@@ -35,6 +35,14 @@
 | `commit-sha` | string | 完整 commit SHA |
 | `commit-message` | string | commit 消息（首行） |
 | `commit-author` | string | commit 作者 |
+
+**pr-create 专有字段**（`review-type` = `pr-create`）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `compare-url` | string 或 `#f` | compare URL（若 URL 为 compare 形式） |
+| `target-owner` | string | 目标仓库 owner（与 `owner` 同义，pr-create 推荐） |
+| `target-repo` | string | 目标仓库 name（与 `repo` 同义，pr-create 推荐） |
 
 ### decision 记录
 
@@ -100,6 +108,32 @@
 | `labels` | list of strings 或 `#f` | 新标签列表（可选，覆盖式） |
 | `assignees` | list of strings 或 `#f` | 新指派人列表（可选，覆盖式） |
 
+### pr-create 记录（最多 1 条）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `section` | symbol `pr-create` | 记录类型标识 |
+| `id` | integer | 固定为 1（schema 限制最多 1 条） |
+| `title` | string | PR 标题（必填） |
+| `body` | string | PR 正文，支持 Markdown（可选，默认 `""`） |
+| `head` | string | 源分支；跨 fork 时格式 `<source-owner>:<branch>`（必填） |
+| `base` | string | 目标基准分支（必填） |
+| `draft` | boolean | 是否为 draft PR（可选，默认 `#f`） |
+| `maintainer-can-modify` | boolean | 跨 fork 时允许 maintainer 修改源分支（可选，默认 `#t`） |
+
+### pr-update 记录（0 到 N 条）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `section` | symbol `pr-update` | 记录类型标识 |
+| `id` | integer | 从 1 开始的序号 |
+| `pr-number` | integer | 目标 PR 编号（必填） |
+| `state` | symbol 或 `#f` | `open` \| `closed`（可选） |
+| `title` | string 或 `#f` | 新标题（可选） |
+| `body` | string 或 `#f` | 新正文（可选） |
+| `base` | string 或 `#f` | 新目标分支（可选） |
+| `draft` | boolean 或 symbol `ready` 或 `#f` | `#t`=转 draft；`'ready`=取消 draft（GraphQL）；`#f`=不修改 |
+
 ## config.rktd
 
 ### platform 记录
@@ -110,7 +144,7 @@
 | `name` | symbol | `github` \| `gitcode` |
 | `api-base` | string | API 根 URL |
 | `auth-env` | string | 认证环境变量名 |
-| `auth-fallback` | string | 备用认证命令 |
+| `auth-fallback` | string 或 `#f` | 备用认证命令；默认可为 `#f`，不要把 `gh` 作为必需依赖 |
 
 ### rule 记录
 
@@ -129,6 +163,7 @@
 | `section` | symbol `settings` | |
 | `default-mode` | symbol | `auto` \| `interactive` |
 | `max-inline-comments` | integer | 最大评论数（默认 20） |
+| `action-mode` | symbol | `interactive` \| `direct-send` \| `dry-run`。默认 `interactive`；仅在用户明确要求或配置允许时执行写操作 |
 
 ## preferences.rktd
 
