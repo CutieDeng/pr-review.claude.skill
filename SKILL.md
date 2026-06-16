@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: "GitHub/GitCode PR/Commit review 技能。解析 PR 或 Commit URL，获取 diff，生成并验证结构化 action data（comment.rktd）。用户明确要求时，可通过 send-comment.rkt 交互式发送评论、创建/更新 Issue 或 PR。"
+description: "GitHub/GitCode PR/Commit review 技能。解析 PR 或 Commit URL，获取 diff，生成并验证结构化 action data（comment.rktd），包含 inline 评论源码行定位自检和平台 payload 派生。用户明确要求时，可通过 send-comment.rkt 交互式发送评论、创建/更新 Issue 或 PR。"
 user-invocable: true
 argument: "<URL> [--mode report|inline|reply|issue|pr-create] [--interactive]"
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch, Agent
@@ -146,8 +146,14 @@ racket $SKILL_DIR/scripts/fetch-diff.rkt --url <URL> --output files
 # 原始 unified diff
 racket $SKILL_DIR/scripts/fetch-diff.rkt --url <URL> --output diff
 
+# patch 行号映射（old/new source line + patch-index）
+racket $SKILL_DIR/scripts/fetch-diff.rkt --url <URL> --output patch-map
+
 # 完整 JSON（供程序消费，默认）
 racket $SKILL_DIR/scripts/fetch-diff.rkt --url <URL> --output json
+
+# 单文件定位排查（推荐用于 inline 评论前确认落点）
+racket $SKILL_DIR/scripts/patch-map.rkt --url <URL> --path <path> --around-line <line>
 ```
 
 按需选择 `--output` 模式，避免拉取全量 JSON 后再用外部脚本解析。
@@ -242,7 +248,9 @@ fetch-diff 返回的 JSON 中包含已有评论数据：
 生成后必须验证 action data：
 - 确认 `.rktd` 可被 Racket `read` 读取，且恰好 1 条 `(section . meta)`
 - 校验 action 记录数量限制，例如 `(section . pr-create)` 最多 1 条
+- 对 PR inline 评论运行定位自检：`racket $SKILL_DIR/scripts/validate-comment.rkt --file comment.rktd --url <URL>`
 - 默认使用 dry-run 验证 payload，不执行写操作：`racket $SKILL_DIR/scripts/send-comment.rkt --dry-run --non-interactive --file comment.rktd`
+- `send-comment.rkt` 会在 dry-run 和实际发送前自动运行定位校验；除调试外不要使用 `--skip-location-check`
 - dry-run 只用于验证/预览；没有明确执行意图时，不得继续运行实际发送命令
 
 ### PR review 格式
@@ -272,7 +280,6 @@ fetch-diff 返回的 JSON 中包含已有评论数据：
  (id . 1)
  (path . "src/foo.rs")
  (line . 45)
- (position . 12)
  (side . "RIGHT")
  (body . "具体评论内容...")
  (severity . critical)
@@ -447,13 +454,13 @@ API：`PATCH /repos/{target-owner}/{target-repo}/pulls/{pr-number}`
 - Commit：可选，仅含 `body`（无 `event`），作为待发送的总结评论
 
 **inline-comment**：
-- `line`：文件行号（新文件中的行号）+ `side`（`"RIGHT"` / `"LEFT"`）。GitHub `/reviews` API 使用此字段
-- `position`：diff 中从 `@@` hunk header 之后第 1 行开始计数的行偏移。GitCode `/comments` API 使用此字段。agent 生成评论时必须根据 diff 数据计算此值
+- `line`：PR 使用源码文件行号；`side` 为 `"RIGHT"` 时是新文件行号，为 `"LEFT"` 时是旧文件行号。Commit review 仍沿用 diff position 语义。
+- `position`：PR review 中为派生/兼容字段，agent 不应手算。GitCode PR inline 发送时由 `send-comment.rkt` 自动令 `position = line`；如果 `comment.rktd` 手写了不一致的 `position`，定位自检必须失败。GitHub PR review 使用 `line + side`，忽略 `position`。
 - `severity`：`critical` | `warning` | `suggestion` | `nitpick`
 - `category`：`security` | `correctness` | `performance` | `style` | `docs`
 - `rule-ref`：关联 config.rktd 规则 id，或 `#f`
 
-**position 计算方法**：从 `fetch-diff.rkt --output json` 返回的 files 数组中取每个文件的 diff 字段，`@@` 行之后的每一行（包括 context、`+`、`-` 行）从 1 开始计数。多个 hunk 时 position 在各 hunk 间连续累加。
+**定位规则**：不要手算平台坐标。生成 inline 评论时先用 `patch-map.rkt` 或 `validate-comment.rkt --self-check` 确认 `path + line + side` 落在 PR diff 中，再让脚本派生平台 payload。
 
 ## 发送（仅在用户明确要求或配置允许时）
 
@@ -624,4 +631,6 @@ Token 文件应为纯文本，内容仅含 token 字符串。建议加入 `.giti
 - `examples/config-example.rktd` — 配置示例
 - `examples/preferences-example.rktd` — 偏好示例
 - `scripts/fetch-diff.rkt` — 数据获取脚本
+- `scripts/patch-map.rkt` — PR/commit patch 行号映射工具
+- `scripts/validate-comment.rkt` — `comment.rktd` schema 和 inline 定位自检工具
 - `scripts/send-comment.rkt` — 评论发送脚本

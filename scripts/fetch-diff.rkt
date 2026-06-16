@@ -15,10 +15,12 @@
 ;;   comments  已有评论列表（含 id/type/discussion_id）
 ;;   files     变更文件列表
 ;;   diff      原始 unified diff 文本
+;;   patch-map 展开每个 patch hunk 的 old/new 行号映射
 
 (require net/http-client
          net/url
          json
+         "location-lib.rkt"
          racket/string
          racket/port
          racket/match
@@ -420,6 +422,18 @@
   (display diff)
   (unless (string=? diff "") (newline)))
 
+(define (print-patch-map result)
+  (printf "path\tpatch-index\tkind\told-line\tnew-line\ttext\n")
+  (for ([e (in-list (files->patch-map result))])
+    (define j (patch-entry->jsexpr e))
+    (printf "~a\t~a\t~a\t~a\t~a\t~a\n"
+            (hash-ref j 'path)
+            (hash-ref j 'patch_index)
+            (hash-ref j 'kind)
+            (hash-ref j 'old_line)
+            (hash-ref j 'new_line)
+            (hash-ref j 'text))))
+
 ;; ── main ─────────────────────────────────────────────────────────────
 
 (define opt-platform  (make-parameter #f))
@@ -428,7 +442,7 @@
 (define opt-type      (make-parameter #f))   ; "pr" or "commit"
 (define opt-ref       (make-parameter #f))   ; pr number or commit sha
 (define opt-url       (make-parameter #f))
-(define opt-output    (make-parameter "json")) ; json | summary | comments | files | diff
+(define opt-output    (make-parameter "json")) ; json | summary | comments | files | diff | patch-map
 
 (command-line
  #:program "fetch-diff"
@@ -439,7 +453,7 @@
  ["--type" t "Review type: pr or commit" (opt-type t)]
  ["--ref" ref "PR number or commit SHA" (opt-ref ref)]
  ["--url" u "Full PR/commit URL (auto-parses all fields)" (opt-url u)]
- ["--output" o "Output mode: json|summary|comments|files|diff (default: json)" (opt-output o)]
+ ["--output" o "Output mode: json|summary|comments|files|diff|patch-map (default: json)" (opt-output o)]
  #:args () (void))
 
 ;; resolve from URL if provided
@@ -477,4 +491,5 @@
   [(comments) (print-comments result)]
   [(files)    (print-files result)]
   [(diff)     (print-diff result)]
-  [else       (error 'fetch-diff "Unknown output mode: ~a. Use json|summary|comments|files|diff" (opt-output))])
+  [(patch-map) (print-patch-map result)]
+  [else       (error 'fetch-diff "Unknown output mode: ~a. Use json|summary|comments|files|diff|patch-map" (opt-output))])

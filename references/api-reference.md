@@ -244,7 +244,7 @@ Parameters（formData）：
 - `body`*（string）— 必填，评论内容
 - `commit_id`（string）— 可选，PR 代码评论的 commit id
 - `path`（string）— 可选，PR 代码评论的文件名
-- `position`（integer）— 可选，PR 代码评论 diff 中的行数
+- `position`（integer）— 可选，PR 代码评论的源码行号。本 skill 对 GitCode PR inline 统一使用源码行号：RIGHT 评论使用新文件行号，LEFT 评论使用旧文件行号，不使用 diff offset。
 
 省略 `path`/`position` 则为普通 PR 评论，带上则为 inline 代码评论。
 
@@ -274,7 +274,7 @@ POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews
 ```
 **不可用**——即使使用 `api.gitcode.com` 仍返回 404。
 
-**替代方案**：decision 作为普通评论（`POST .../comments`，不带 `path`/`position`），inline comments 逐条带 `path`+`position` 发送。
+**替代方案**：decision 作为普通评论（`POST .../comments`，不带 `path`/`position`），inline comments 逐条带 `path`+源码行号形式的 `position` 发送。
 
 ### Commit 评论
 ```

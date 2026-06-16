@@ -62,7 +62,8 @@
 | `section` | symbol `inline-comment` | 记录类型标识 |
 | `id` | integer | 从 1 开始的序号 |
 | `path` | string | 文件相对路径 |
-| `line` | integer | PR：文件行号；Commit：diff 中的 position |
+| `line` | integer | PR：源码文件行号（RIGHT=新文件，LEFT=旧文件）；Commit：diff 中的 position |
+| `position` | integer | 可选/派生字段。PR review 不要求手写；GitCode PR inline 发送时由脚本派生为源码行号，若手写且与 `line` 不一致则校验失败 |
 | `side` | string | `"RIGHT"`（新代码）\| `"LEFT"`（旧代码）。Commit 模式可省略 |
 | `body` | string | 评论内容 |
 | `severity` | symbol | `critical` \| `warning` \| `suggestion` \| `nitpick` |

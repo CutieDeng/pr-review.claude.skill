@@ -13,7 +13,10 @@
          racket/cmdline
          racket/system
          racket/file
-         racket/promise)
+         racket/promise
+         racket/runtime-path)
+
+(define-runtime-path script-dir ".")
 
 ;; ── helpers ──────────────────────────────────────────────────────────
 
@@ -228,6 +231,7 @@
 (define dry-run? (make-parameter #f))
 (define non-interactive? (make-parameter #f))
 (define skip-nitpicks? (make-parameter #f))
+(define skip-location-check? (make-parameter #f))
 (define comment-file (make-parameter "comment.rktd"))
 
 (define remaining
@@ -240,6 +244,8 @@
     (non-interactive? #t)]
    ["--skip-nitpicks" "Skip nitpick-severity comments"
     (skip-nitpicks? #t)]
+   ["--skip-location-check" "Debug only: skip inline location validation"
+    (skip-location-check? #t)]
    ["--file" f "Path to comment.rktd (default: comment.rktd)"
     (comment-file f)]
    #:args rest
@@ -550,6 +556,41 @@
                ['edit (loop (cdr us) (cons u acc))]
                ['quit (begin (displayln "\nAborted. Nothing sent.") (exit 0))]))))]))
 
+(define (write-records path recs)
+  (call-with-output-file path
+    (lambda (out)
+      (for ([r (in-list recs)])
+        (write r out)
+        (newline out)))
+    #:exists 'truncate))
+
+(define (validate-final-inline-locations! final-comments)
+  (when (and (not (skip-location-check?))
+             (eq? review-type 'pr)
+             (not (null? final-comments)))
+    (define pr-url (get* 'pr-url meta #f))
+    (unless pr-url
+      (error 'send-comment
+             "PR inline location validation requires pr-url in meta"))
+    (define tmp (make-temporary-file "pr-review-comment-~a.rktd"))
+    (define records-with-final-comments
+      (append (filter (lambda (r) (not (section=? 'inline-comment r))) records)
+              final-comments))
+    (write-records tmp records-with-final-comments)
+    (define racket-exe (or (find-executable-path "racket") "racket"))
+    (define validator (build-path script-dir "validate-comment.rkt"))
+    (flush-output)
+    (define ok?
+      (system* racket-exe (path->string validator)
+               "--file" (path->string tmp)
+               "--url" pr-url))
+    (delete-file tmp)
+    (unless ok?
+      (error 'send-comment
+             "inline location validation failed; fix comment.rktd or use --skip-location-check for debugging only"))))
+
+(validate-final-inline-locations! final-comments)
+
 (printf "\n~a: ~a comments + ~a replies + ~a issues + ~a updates + ~a pr-creates + ~a pr-updates to send~a\n"
         (color 1 "Final")
         (length final-comments)
@@ -562,13 +603,20 @@
 
 ;; ── send: PR review (batch) ──────────────────────────────────────────
 
-;; Build individual PR comment payload (for GitCode per-comment sending)
-;; 支持 inline：body*(必填), path(文件名), position(diff 行偏移)
+;; Build individual PR comment payload (for GitCode per-comment sending).
+;; GitCode PR inline uses source line as `position`; do not pass diff offsets.
 (define (build-pr-comment-payload c)
   (define h (make-hasheq))
   (hash-set! h 'body (get 'body c))
   (when (get* 'path c) (hash-set! h 'path (get* 'path c)))
-  (when (get* 'position c) (hash-set! h 'position (get* 'position c)))
+  (define position
+    (cond
+      [(and (eq? platform 'gitcode)
+            (eq? review-type 'pr)
+            (get* 'line c #f))
+       (get 'line c)]
+      [else (get* 'position c #f)]))
+  (when position (hash-set! h 'position position))
   h)
 
 (define (send-pr-review! final-comments)
